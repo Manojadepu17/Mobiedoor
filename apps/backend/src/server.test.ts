@@ -1,8 +1,14 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { app } from "./server.js";
+import { app, isCloudinaryImageUrl } from "./server.js";
 
 describe("public API security and contracts", () => {
+  it("accepts only HTTPS Cloudinary image URLs for product records", () => {
+    expect(isCloudinaryImageUrl("https://res.cloudinary.com/demo/image/upload/sample.jpg")).toBe(true);
+    expect(isCloudinaryImageUrl("http://localhost:4000/uploads/product.jpg")).toBe(false);
+    expect(isCloudinaryImageUrl("https://example.com/product.jpg")).toBe(false);
+  });
+
   it("trusts exactly one Render proxy hop before rate limiting", async () => {
     expect(app.get("trust proxy")).toBe(1);
 

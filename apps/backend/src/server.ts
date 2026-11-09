@@ -24,6 +24,15 @@ const uploadDirectory = path.resolve(process.cwd(), config.uploadDirectory);
 const MAX_PAGE_SIZE = 50;
 const adminRoles = [UserRole.FOUNDER, UserRole.ADMIN];
 
+export function isCloudinaryImageUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "res.cloudinary.com";
+  } catch {
+    return false;
+  }
+}
+
 const publicProductSelect = {
   id: true, name: true, slug: true, sku: true, brand: true, model: true, description: true,
   priceInPaise: true, originalPriceInPaise: true, condition: true, category: true,
@@ -70,7 +79,7 @@ const productSchema = z.object({
   originalPriceInPaise: z.coerce.number().int().nonnegative().optional(), condition: z.enum(["LIKE_NEW", "EXCELLENT", "GOOD", "FAIR"]),
   category: z.string().trim().min(2).max(80), stockQuantity: z.coerce.number().int().min(0).max(100000),
   warrantyMonths: z.coerce.number().int().min(0).max(120).optional(), specifications: z.record(z.string(), z.unknown()).default({}),
-  imageUrls: z.array(z.string().url()).max(20).default([]), isPublished: z.boolean().default(false),
+  imageUrls: z.array(z.string().url().refine(isCloudinaryImageUrl, "Product images must use Cloudinary HTTPS URLs.")).max(20).default([]), isPublished: z.boolean().default(false),
 });
 const statusSchema = z.object({ status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "ARCHIVED"]).optional(), adminNotes: z.string().trim().max(5000).optional() }).refine(input => input.status !== undefined || input.adminNotes !== undefined, "A status or note is required.");
 const staffSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(10).max(200), role: z.enum(["ADMIN", "STAFF"]) });
@@ -268,7 +277,7 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
       form.append("signature", signature);
       const cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, { method: "POST", body: form });
       const cloudinaryBody = await cloudinaryResponse.json() as { secure_url?: string; error?: { message?: string } };
-      if (!cloudinaryResponse.ok || !cloudinaryBody.secure_url) {
+      if (!cloudinaryResponse.ok || !cloudinaryBody.secure_url || !isCloudinaryImageUrl(cloudinaryBody.secure_url)) {
         logger.error("Cloudinary image upload failed", { status: cloudinaryResponse.status, message: cloudinaryBody.error?.message });
         response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: "The image could not be stored. Please try again." } });
         return;

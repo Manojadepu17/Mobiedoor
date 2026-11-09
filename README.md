@@ -162,7 +162,7 @@ The endpoint checks should be run with the backend started via `npm run dev --wo
 - Product categories retain the legacy string field for catalogue compatibility. Managed categories are stored separately and merged into the public category response.
 - A Founder/Admin account must be provisioned manually; no default password or seeded account is created.
 - Deployment still requires a managed MySQL instance, a production `DATABASE_URL`, a restricted `FRONTEND_URL`, HTTPS, and secure production cookies.
-- Product images currently remain URL-only. Cloudinary is the proposed later image solution: the future integration will need a server-side upload/signature flow, MIME/type and size validation, transformed delivery URLs, deletion handling when products change, and the Cloudinary names `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Those keys are not required now, and no upload API has been implemented.
+- Product images are uploaded through the authenticated Founder/Admin-only Cloudinary endpoint. The backend accepts only HTTPS URLs hosted by `res.cloudinary.com` when saving products. Existing records containing legacy localhost upload URLs must be re-uploaded from the admin product editor; no database reset or destructive migration is required.
 - Production still requires managed database backups, restore testing, structured log collection, uptime monitoring, and a controlled `prisma migrate deploy` release step. Do not use `prisma db push` in production.
 
 Never commit `.env` files or real credentials.
