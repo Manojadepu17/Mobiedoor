@@ -1,7 +1,5 @@
 import "dotenv/config";
 import type { Server } from "node:http";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -20,7 +18,6 @@ import { logger } from "./logger.js";
 const app = express();
 app.set("trust proxy", 1);
 const port = config.port;
-const uploadDirectory = path.resolve(process.cwd(), config.uploadDirectory);
 const MAX_PAGE_SIZE = 50;
 const adminRoles = [UserRole.FOUNDER, UserRole.ADMIN];
 
@@ -91,7 +88,6 @@ app.disable("x-powered-by");
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: config.frontendUrl, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
-app.use("/uploads", express.static(uploadDirectory, { fallthrough: false, index: false }));
 
 app.use((request, response, next) => {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
@@ -275,11 +271,20 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
       form.append("public_id", publicId);
       form.append("folder", "mobiedoor/products");
       form.append("signature", signature);
-      const cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, { method: "POST", body: form });
-      const cloudinaryBody = await cloudinaryResponse.json() as { secure_url?: string; error?: { message?: string } };
+      let cloudinaryResponse: Response;
+      let cloudinaryBody: { secure_url?: string; error?: { message?: string } };
+      try {
+        cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, { method: "POST", body: form });
+        cloudinaryBody = await cloudinaryResponse.json() as { secure_url?: string; error?: { message?: string } };
+      } catch (error) {
+        logger.error("Cloudinary image upload request failed", error);
+        response.status(502).json({ error: { code: "IMAGE_STORAGE_UNAVAILABLE", message: "Cloudinary could not be reached. Check the backend network and try again." } });
+        return;
+      }
       if (!cloudinaryResponse.ok || !cloudinaryBody.secure_url || !isCloudinaryImageUrl(cloudinaryBody.secure_url)) {
-        logger.error("Cloudinary image upload failed", { status: cloudinaryResponse.status, message: cloudinaryBody.error?.message });
-        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: "The image could not be stored. Please try again." } });
+        const providerMessage = cloudinaryBody.error?.message?.trim();
+        logger.error("Cloudinary image upload failed", { status: cloudinaryResponse.status, message: providerMessage });
+        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: providerMessage ? `Cloudinary rejected the image: ${providerMessage}` : "Cloudinary returned an invalid image response. Check the backend Cloudinary configuration." } });
         return;
       }
       await recordActivity(request.user!.id, "UPLOAD", "PRODUCT_IMAGE", publicId);
@@ -290,13 +295,7 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
       response.status(503).json({ error: { code: "IMAGE_STORAGE_NOT_CONFIGURED", message: "Cloud image storage is not configured. Set the Cloudinary environment variables before uploading images." } });
       return;
     }
-    const extension = detected.mime === "image/jpeg" ? "jpg" : detected.ext;
-    const filename = `product-${randomUUID()}.${extension}`;
-    await mkdir(uploadDirectory, { recursive: true });
-    await writeFile(path.join(uploadDirectory, filename), file.buffer, { flag: "wx" });
-    const url = `${request.protocol}://${request.get("host")}/uploads/${encodeURIComponent(filename)}`;
-    await recordActivity(request.user!.id, "UPLOAD", "PRODUCT_IMAGE", filename);
-    response.status(201).json({ data: { url, width: dimensions.width, height: dimensions.height } });
+    response.status(503).json({ error: { code: "IMAGE_STORAGE_NOT_CONFIGURED", message: "Cloud image storage is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET on the backend before uploading images." } });
   } catch (error) {
     next(error);
   }
