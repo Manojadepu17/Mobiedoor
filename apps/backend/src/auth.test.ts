@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { UserRole } from "@prisma/client";
-import { requireRoles } from "./auth.js";
+import { cookieAttributes, requireRoles } from "./auth.js";
+
+describe("session cookie attributes", () => {
+  it("uses Secure and SameSite=None in production", () => {
+    expect(cookieAttributes(true)).toBe("HttpOnly; Path=/; SameSite=None; Secure");
+  });
+
+  it("uses an insecure SameSite=Lax cookie outside production", () => {
+    expect(cookieAttributes(false)).toBe("HttpOnly; Path=/; SameSite=Lax");
+  });
+});
 
 describe("role authorization", () => {
   it("allows Founder and Admin through the same permission gate", () => {

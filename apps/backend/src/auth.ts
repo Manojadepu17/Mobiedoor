@@ -8,7 +8,8 @@ const SESSION_COOKIE = "mobiedoor_session";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
-const cookieAttributes = () => `HttpOnly; Path=/; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`;
+export const cookieAttributes = (isProduction = process.env.NODE_ENV === "production") =>
+  `HttpOnly; Path=/; SameSite=${isProduction ? "None" : "Lax"}${isProduction ? "; Secure" : ""}`;
 
 export type AuthUser = {
   id: string;

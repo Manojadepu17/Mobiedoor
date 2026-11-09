@@ -39,6 +39,12 @@ if (!testDatabaseUrl) {
     const agent = request.agent(app);
     const response = await agent.post("/auth/login").send({ email, password });
     expect(response.status).toBe(200);
+    expect(response.headers["set-cookie"]).toHaveLength(1);
+    expect(response.headers["set-cookie"][0]).toContain("mobiedoor_session=");
+    expect(response.headers["set-cookie"][0]).toContain("HttpOnly");
+    expect(response.headers["set-cookie"][0]).toContain("SameSite=Lax");
+    expect(response.headers["set-cookie"][0]).toContain("Max-Age=28800");
+    expect((await agent.get("/auth/me")).status).toBe(200);
     return agent;
   }
 
