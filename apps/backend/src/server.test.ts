@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { app } from "./server.js";
 
 describe("public API security and contracts", () => {
+  it("does not trust forwarded proxy headers during local development", async () => {
+    expect(app.get("trust proxy")).toBe(false);
+  });
+
   it("reports a database-backed healthy service", async () => {
     const response = await request(app).get("/health");
     expect(response.status).toBe(200);
