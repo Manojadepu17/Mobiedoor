@@ -1,0 +1,18 @@
+node_modules/
+dist/
+uploads/
+coverage/
+.env
+.env.*
+!.env.example
+!.env.test.example
+*.log
+.DS_Store
+apps/backend/prisma/dev.db
+# Private project documents
+MobieDoor_Grant_Pitch_Deck.pdf
+file.png
+
+# Local editor settings
+.vscode/
+*.tsbuildinfo

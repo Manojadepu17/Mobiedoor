@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  FOUNDER
+  ADMIN
+  STAFF
+  CUSTOMER
+}
+
+enum ProductCondition {
+  LIKE_NEW
+  EXCELLENT
+  GOOD
+  FAIR
+}
+
+enum ProductAvailability {
+  IN_STOCK
+  LOW_STOCK
+  OUT_OF_STOCK
+  DISCONTINUED
+}
+
+enum EnquiryStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  ARCHIVED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(STAFF)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  sessions     Session[]
+  activityLogs ActivityLog[]
+  inventoryAdjustments InventoryAdjustment[]
+
+  @@map("users")
+}
+
+model InitialSetupState {
+  id          Int       @id @default(1)
+  completedAt DateTime? @map("completed_at")
+
+  @@map("initial_setup_state")
+}
+
+model Product {
+  id                String          @id @default(cuid())
+  name              String
+  slug              String          @unique
+  sku               String?         @unique
+  brand             String
+  model             String
+  description       String          @db.Text
+  priceInPaise      Int             @map("price_in_paise")
+  originalPriceInPaise Int?         @map("original_price_in_paise")
+  condition         ProductCondition
+  category          String
+  stockQuantity     Int             @default(0) @map("stock_quantity")
+  availability      ProductAvailability @default(OUT_OF_STOCK)
+  warrantyMonths    Int?            @map("warranty_months")
+  specifications    Json
+  imageUrls         Json            @map("image_urls")
+  isPublished       Boolean         @default(false) @map("is_published")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+  inventoryAdjustments InventoryAdjustment[]
+
+  @@index([brand])
+  @@index([category])
+  @@index([isPublished])
+  @@map("products")
+}
+
+model TradeInEnquiry {
+  id                  String   @id @default(cuid())
+  customerName        String   @map("customer_name")
+  phoneNumber         String   @map("phone_number")
+  email               String?
+  city                String
+  deviceBrand         String   @map("device_brand")
+  deviceModel         String   @map("device_model")
+  deviceCondition     String   @map("device_condition")
+  purchaseYear        Int?     @map("purchase_year")
+  additionalDescription String? @db.Text @map("additional_description")
+  createdAt           DateTime @default(now()) @map("created_at")
+  status              EnquiryStatus @default(NEW)
+  adminNotes          String?  @db.Text @map("admin_notes")
+
+  @@index([createdAt])
+  @@map("trade_in_enquiries")
+}
+
+model PartnershipEnquiry {
+  id           String   @id @default(cuid())
+  companyName  String   @map("company_name")
+  contactName   String   @map("contact_name")
+  email        String
+  phoneNumber  String   @map("phone_number")
+  city         String
+  message      String   @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  status       EnquiryStatus @default(NEW)
+  adminNotes   String?  @db.Text @map("admin_notes")
+
+  @@index([createdAt])
+  @@map("partnership_enquiries")
+}
+
+model ContactEnquiry {
+  id          String   @id @default(cuid())
+  name        String
+  email       String
+  phoneNumber String   @map("phone_number")
+  message     String   @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  status      EnquiryStatus @default(NEW)
+  adminNotes  String?  @db.Text @map("admin_notes")
+
+  @@index([createdAt])
+  @@map("contact_enquiries")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("categories")
+}
+
+model WebsiteSetting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("website_settings")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model InventoryAdjustment {
+  id           String   @id @default(cuid())
+  productId    String   @map("product_id")
+  userId       String   @map("user_id")
+  quantity     Int
+  reason       String   @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt])
+  @@map("inventory_adjustments")
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  action    String   @db.VarChar(100)
+  entity    String   @db.VarChar(100)
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@map("activity_logs")
+}

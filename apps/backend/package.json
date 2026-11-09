@@ -1,0 +1,47 @@
+{
+  "name": "@mobiedoor/backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "db:validate": "prisma validate",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "test": "vitest run",
+    "test:integration": "vitest run src/integration.test.ts",
+    "db:deploy": "prisma migrate deploy",
+    "provision:admin": "tsx src/scripts/provision-admin.ts",
+    "provision:founder": "tsx src/scripts/provision-founder.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.1.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "file-type": "^22.3.0",
+    "helmet": "^8.0.0",
+    "image-size": "^2.1.0",
+    "multer": "^2.5.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^22.10.5",
+    "@types/supertest": "^6.0.2",
+    "prisma": "^6.1.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

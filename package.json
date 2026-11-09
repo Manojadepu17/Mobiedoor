@@ -1,0 +1,26 @@
+{
+  "name": "mobiedoor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MobieDoor circular electronics platform",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace @mobiedoor/backend\" \"npm run dev --workspace @mobiedoor/frontend\"",
+    "build": "npm run build --workspace @mobiedoor/backend && npm run build --workspace @mobiedoor/frontend",
+    "typecheck": "npm run typecheck --workspace @mobiedoor/backend && npm run typecheck --workspace @mobiedoor/frontend",
+    "test": "npm run test --workspace @mobiedoor/backend",
+    "db:validate": "npm run db:validate --workspace @mobiedoor/backend",
+    "db:generate": "npm run db:generate --workspace @mobiedoor/backend",
+    "db:push": "npm run db:push --workspace @mobiedoor/backend",
+    "db:migrate": "npm run db:migrate --workspace @mobiedoor/backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
