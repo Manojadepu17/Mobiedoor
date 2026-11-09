@@ -3,8 +3,16 @@ import { describe, expect, it } from "vitest";
 import { app } from "./server.js";
 
 describe("public API security and contracts", () => {
-  it("does not trust forwarded proxy headers during local development", async () => {
-    expect(app.get("trust proxy")).toBe(false);
+  it("trusts exactly one Render proxy hop before rate limiting", async () => {
+    expect(app.get("trust proxy")).toBe(1);
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("X-Forwarded-For", "203.0.113.10")
+      .send({ email: "not-an-email", password: "short" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
   it("reports a database-backed healthy service", async () => {

@@ -18,7 +18,7 @@ import { config } from "./config.js";
 import { logger } from "./logger.js";
 
 const app = express();
-app.set("trust proxy", config.isProduction ? 1 : config.trustProxy);
+app.set("trust proxy", 1);
 const port = config.port;
 const uploadDirectory = path.resolve(process.cwd(), config.uploadDirectory);
 const MAX_PAGE_SIZE = 50;

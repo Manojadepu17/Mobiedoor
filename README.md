@@ -34,7 +34,7 @@ Set environment variables through the hosting provider's secret/configuration ma
 
 Optional proxy configuration:
 
-- `TRUST_PROXY` - `false` or the number of trusted reverse-proxy hops for local and non-production environments. Render production deployments trust exactly one proxy hop in the backend regardless of this value; do not enable proxy trust broadly when the service is directly reachable.
+- `TRUST_PROXY` - legacy setting retained for compatibility; the backend always trusts exactly one reverse-proxy hop to match the Render deployment topology. Do not change the application to trust proxies broadly when the service is directly reachable.
 
 Provisioning-only names:
 
@@ -54,7 +54,7 @@ Production sessions use `HttpOnly`, `SameSite=Lax`, and `Secure` cookies. HTTPS 
 
 The backend handles `SIGTERM` and `SIGINT`, stops accepting new requests, waits up to 10 seconds for active requests, disconnects Prisma, and then completes shutdown. Hosting platforms should send `SIGTERM` during graceful replacement. Rate limits currently use process memory; a shared store is required before running multiple backend instances.
 
-The backend uses Express client-IP resolution for rate limiting. Local and non-production environments use `TRUST_PROXY`; Render production deployments trust exactly one proxy hop because Render forwards the client IP through its reverse proxy. Keep the backend inaccessible except through the intended proxy where possible.
+The backend uses Express client-IP resolution for rate limiting and always trusts exactly one proxy hop because Render forwards the client IP through its reverse proxy. Local development continues to work without forwarded headers. Keep the backend inaccessible except through the intended proxy where possible.
 
 ## Frontend hosting and SPA routing
 
