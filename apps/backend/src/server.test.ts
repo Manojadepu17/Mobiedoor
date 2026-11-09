@@ -1,8 +1,19 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { app, isCloudinaryImageUrl } from "./server.js";
+import { app, getCloudinaryErrorDetails, isCloudinaryImageUrl } from "./server.js";
 
 describe("public API security and contracts", () => {
+  it("extracts sanitized Cloudinary provider diagnostics", () => {
+    expect(getCloudinaryErrorDetails({
+      error: { message: "Invalid API key", name: "Error", code: "401", http_code: 401 },
+    }, 502)).toEqual({
+      cloudinaryErrorMessage: "Invalid API key",
+      cloudinaryErrorName: "Error",
+      cloudinaryErrorCode: "401",
+      cloudinaryErrorStatus: 401,
+    });
+  });
+
   it("accepts only HTTPS Cloudinary image URLs for product records", () => {
     expect(isCloudinaryImageUrl("https://res.cloudinary.com/demo/image/upload/sample.jpg")).toBe(true);
     expect(isCloudinaryImageUrl("http://localhost:4000/uploads/product.jpg")).toBe(false);

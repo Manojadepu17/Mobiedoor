@@ -30,6 +30,29 @@ export function isCloudinaryImageUrl(value: string) {
   }
 }
 
+type CloudinaryErrorBody = {
+  secure_url?: string;
+  error?: {
+    message?: string;
+    name?: string;
+    code?: string | number;
+    http_code?: number;
+    status?: number;
+    statusCode?: number;
+  };
+};
+
+export function getCloudinaryErrorDetails(body: CloudinaryErrorBody, responseStatus: number) {
+  const providerError = body.error;
+  const status = providerError?.http_code ?? providerError?.status ?? providerError?.statusCode ?? responseStatus;
+  return {
+    cloudinaryErrorMessage: providerError?.message?.trim() || "Cloudinary returned an invalid image response.",
+    cloudinaryErrorName: providerError?.name,
+    cloudinaryErrorCode: providerError?.code,
+    cloudinaryErrorStatus: status,
+  };
+}
+
 const publicProductSelect = {
   id: true, name: true, slug: true, sku: true, brand: true, model: true, description: true,
   priceInPaise: true, originalPriceInPaise: true, condition: true, category: true,
@@ -272,19 +295,19 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
       form.append("folder", "mobiedoor/products");
       form.append("signature", signature);
       let cloudinaryResponse: Response;
-      let cloudinaryBody: { secure_url?: string; error?: { message?: string } };
+      let cloudinaryBody: CloudinaryErrorBody;
       try {
         cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, { method: "POST", body: form });
-        cloudinaryBody = await cloudinaryResponse.json() as { secure_url?: string; error?: { message?: string } };
+        cloudinaryBody = await cloudinaryResponse.json() as CloudinaryErrorBody;
       } catch (error) {
         logger.error("Cloudinary image upload request failed", error);
         response.status(502).json({ error: { code: "IMAGE_STORAGE_UNAVAILABLE", message: "Cloudinary could not be reached. Check the backend network and try again." } });
         return;
       }
       if (!cloudinaryResponse.ok || !cloudinaryBody.secure_url || !isCloudinaryImageUrl(cloudinaryBody.secure_url)) {
-        const providerMessage = cloudinaryBody.error?.message?.trim();
-        logger.error("Cloudinary image upload failed", { status: cloudinaryResponse.status, message: providerMessage });
-        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: providerMessage ? `Cloudinary rejected the image: ${providerMessage}` : "Cloudinary returned an invalid image response. Check the backend Cloudinary configuration." } });
+        const diagnostics = getCloudinaryErrorDetails(cloudinaryBody, cloudinaryResponse.status);
+        logger.error("Cloudinary image upload failed", undefined, diagnostics);
+        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: diagnostics.cloudinaryErrorMessage === "Cloudinary returned an invalid image response." ? "Cloudinary returned an invalid image response. Check the backend Cloudinary configuration." : `Cloudinary rejected the image: ${diagnostics.cloudinaryErrorMessage}` } });
         return;
       }
       await recordActivity(request.user!.id, "UPLOAD", "PRODUCT_IMAGE", publicId);
