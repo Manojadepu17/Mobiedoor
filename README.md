@@ -25,16 +25,17 @@ Development uses convenient localhost defaults for `FRONTEND_URL` and `PORT`. Pr
 
 ## Production configuration
 
-Set environment variables through the hosting provider's secret/configuration manager. Required names are:
+Set environment variables through the hosting provider's secret/configuration manager. Required backend production values are:
 
 - `DATABASE_URL`
 - `FRONTEND_URL`
 - `NODE_ENV`
-- `PORT`
+
+`PORT` is supplied by Render and defaults to `4000` for local runs.
 
 Optional proxy configuration:
 
-- `TRUST_PROXY` - legacy setting retained for compatibility; the backend always trusts exactly one reverse-proxy hop to match the Render deployment topology. Do not change the application to trust proxies broadly when the service is directly reachable.
+- `TRUST_PROXY` - Express proxy trust setting. Use `1` for the Render reverse proxy; development defaults to `false` and production defaults to one trusted hop if omitted. Do not set broad values such as `true` or `*`.
 
 Provisioning-only names:
 
@@ -42,25 +43,32 @@ Provisioning-only names:
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 - `INITIAL_SETUP_SECRET` - one-time website setup secret, at least 32 characters
-- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` - required for direct product-image uploads. Store these only in the backend hosting provider's secret manager.
 
 Testing-only name:
 
 - `TEST_DATABASE_URL`
 
-The documented `SESSION_SECRET` variable is reserved for a future signing strategy and is not currently read by the application. Do not treat it as a substitute for the database or hosting-provider secret configuration.
+Production image uploads also require `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Store these only in the backend hosting provider's secret manager; never use `VITE_` names for secrets.
 
-Production sessions use `HttpOnly`, `SameSite=Lax`, and `Secure` cookies. HTTPS is required. State-changing requests must include the configured frontend `Origin`; requests from other origins, or production requests without an origin, are rejected to protect cookie-authenticated operations from CSRF.
+Set `VITE_API_URL` in the frontend build environment to the backend's public HTTPS origin (for example, the Render service URL). Local development can use `apps/frontend/.env.example`. Production frontend builds fail when `VITE_API_URL` is missing rather than silently targeting localhost. Only public API origins belong in `VITE_` variables.
+
+Sessions are persisted in Prisma/MySQL and use an `HttpOnly` cookie at `/`. Local development uses `SameSite=Lax`; production uses `SameSite=None; Secure` because the Vercel frontend and Render API are cross-site. Production requires HTTPS. State-changing requests must include the configured frontend `Origin`; requests from other origins, or production requests without an origin, are rejected to protect cookie-authenticated operations from CSRF.
 
 The backend handles `SIGTERM` and `SIGINT`, stops accepting new requests, waits up to 10 seconds for active requests, disconnects Prisma, and then completes shutdown. Hosting platforms should send `SIGTERM` during graceful replacement. Rate limits currently use process memory; a shared store is required before running multiple backend instances.
 
-The backend uses Express client-IP resolution for rate limiting and always trusts exactly one proxy hop because Render forwards the client IP through its reverse proxy. Local development continues to work without forwarded headers. Keep the backend inaccessible except through the intended proxy where possible.
+The backend uses Express client-IP resolution for rate limiting and applies `TRUST_PROXY`; Render forwards the client IP through its reverse proxy, so set the value to `1` there. Local development defaults to not trusting forwarded headers. Keep the backend inaccessible except through the intended proxy where possible.
 
 ## Frontend hosting and SPA routing
 
 The frontend uses `BrowserRouter`. [vercel.json](./vercel.json) rewrites non-API paths to `index.html`, so direct navigation and refreshes for `/admin`, `/products/:slug`, and nested routes work on Vercel. The rewrite intentionally excludes paths beginning with `/api/`; the current architecture uses a separately hosted backend and `VITE_API_URL`, so API traffic is not routed through this frontend deployment.
 
 For another static host, configure its equivalent “all application routes to `index.html`” fallback while leaving API requests routed to the backend. Set the frontend build output to `apps/frontend/dist` and configure `VITE_API_URL` at build time.
+
+## Product prices and images
+
+Product `priceInPaise` and `originalPriceInPaise` are integer paise in MySQL and in backend API payloads. The admin editor accepts INR, converts it to paise before submission, and displays stored paise as INR. Original price must exceed selling price to display a discount. No existing product values are converted or rewritten by this change; review legacy records before any future data migration.
+
+Product images are uploaded directly from memory to Cloudinary with a 30-second request timeout; there is no local filesystem fallback. Because a successful upload can be abandoned before the product is saved, a future cleanup should first list Cloudinary assets in `mobiedoor/products`, wait at least 30 days, and compare each asset URL/public ID against every product's `imageUrls`. Start with a dry run and delete only confirmed unreferenced assets. No automatic or destructive cleanup is enabled.
 
 ## Public API
 
@@ -97,7 +105,7 @@ npm run provision:admin --workspace @mobiedoor/backend
 Remove-Item Env:ADMIN_NAME, Env:ADMIN_EMAIL, Env:ADMIN_PASSWORD
 ```
 
-The provisioning script hashes the password with bcrypt and never stores or prints the plaintext value. Sessions are stored as SHA-256 token hashes in MySQL and delivered through an HTTP-only cookie. Production sessions use `Secure` cookies when `NODE_ENV=production`.
+The provisioning script hashes the password with bcrypt and never stores or prints the plaintext value. Sessions are stored as SHA-256 token hashes in MySQL and delivered through an HTTP-only cookie. Production sessions use `SameSite=None; Secure` cookies.
 
 For a local-only Founder account, use the separate create-only command. The script prompts for the name and email, and accepts the password twice interactively without echoing:
 
@@ -151,7 +159,7 @@ npm run build
 npm run test --workspace @mobiedoor/backend
 ```
 
-Backend tests cover public API contracts, validation, database-backed health, unauthenticated access, and Founder/Admin/Staff authorization gates. The admin UI uses controlled form validation and does not display passwords or session tokens. For end-to-end authenticated testing, provision a non-production test account in a separate database and use the login flow; never use production credentials or data.
+Backend tests cover public API contracts, validation, database-backed health, unauthenticated access, and Founder/Admin/Staff authorization gates. Frontend price tests cover INR/paise conversion, formatted INR display, and discount calculation with `npm test --workspace @mobiedoor/frontend`. The admin UI does not display passwords or session tokens. For end-to-end authenticated testing, provision a non-production test account in a separate database and use the login flow; never use production credentials or data.
 
 The endpoint checks should be run with the backend started via `npm run dev --workspace @mobiedoor/backend`. The frontend product catalogue and product details use the live API; contact, trade-in, and partnership forms display success only after the backend returns a `201` response.
 

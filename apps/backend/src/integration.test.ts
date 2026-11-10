@@ -31,7 +31,7 @@ if (!testDatabaseUrl) {
   const { prisma } = await import("./lib/prisma.js");
   const fixturePrefix = `integration-${Date.now()}`;
   const password = "Integration-password-2026!";
-  const users: Record<"founder" | "admin" | "staff", { id: string; email: string }> = {} as never;
+  const users: Record<"founder" | "admin" | "staff" | "customer" | "inactive" | "lastAdmin", { id: string; email: string }> = {} as never;
   const productIds: string[] = [];
   const enquiryIds: string[] = [];
 
@@ -57,6 +57,7 @@ if (!testDatabaseUrl) {
       slug: `${fixturePrefix}-${suffix}`.toLowerCase(),
       description: "Controlled integration-test product record.",
       priceInPaise: 100000,
+      originalPriceInPaise: 120000,
       condition: "EXCELLENT",
       category: "Integration",
       stockQuantity: 2,
@@ -65,6 +66,8 @@ if (!testDatabaseUrl) {
       isPublished: false,
     });
     expect(response.status).toBe(201);
+    expect(response.body.data.priceInPaise).toBe(100000);
+    expect(response.body.data.originalPriceInPaise).toBe(120000);
     productIds.push(response.body.data.id);
     return response.body.data.id as string;
   }
@@ -74,6 +77,9 @@ if (!testDatabaseUrl) {
     users.founder = await prisma.user.create({ data: { name: `${fixturePrefix} Founder`, email: `${fixturePrefix}-founder@example.test`, passwordHash, role: "FOUNDER" }, select: { id: true, email: true } });
     users.admin = await prisma.user.create({ data: { name: `${fixturePrefix} Admin`, email: `${fixturePrefix}-admin@example.test`, passwordHash, role: "ADMIN" }, select: { id: true, email: true } });
     users.staff = await prisma.user.create({ data: { name: `${fixturePrefix} Staff`, email: `${fixturePrefix}-staff@example.test`, passwordHash, role: "STAFF" }, select: { id: true, email: true } });
+    users.customer = await prisma.user.create({ data: { name: `${fixturePrefix} Customer`, email: `${fixturePrefix}-customer@example.test`, passwordHash, role: "CUSTOMER" }, select: { id: true, email: true } });
+    users.inactive = await prisma.user.create({ data: { name: `${fixturePrefix} Inactive`, email: `${fixturePrefix}-inactive@example.test`, passwordHash, role: "STAFF", isActive: false }, select: { id: true, email: true } });
+    users.lastAdmin = await prisma.user.create({ data: { name: `${fixturePrefix} Last Admin`, email: `${fixturePrefix}-last-admin@example.test`, passwordHash, role: "ADMIN" }, select: { id: true, email: true } });
   });
 
   afterAll(async () => {
@@ -93,12 +99,26 @@ if (!testDatabaseUrl) {
       expect((await agent.get("/auth/me")).status).toBe(401);
     });
 
+    it("rejects inactive users before creating a session", async () => {
+      const response = await request(app).post("/auth/login").send({ email: users.inactive.email, password });
+      expect(response.status).toBe(403);
+      expect(response.body.error).toMatchObject({ code: "ACCOUNT_INACTIVE" });
+      expect(response.body.error.message).toContain("inactive");
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(await prisma.session.count({ where: { userId: users.inactive.id } })).toBe(0);
+    });
+
     it("gives Founder and Admin equivalent product and inventory permissions", async () => {
       for (const [role, email] of [["founder", users.founder.email], ["admin", users.admin.email]] as const) {
         const agent = await login(email);
         const productId = await createProduct(agent, role);
         expect((await agent.patch(`/admin/products/${productId}`).send({ description: `Edited by ${role}` })).status).toBe(200);
-        expect((await agent.patch(`/admin/products/${productId}/publish`).send({ isPublished: true })).status).toBe(200);
+        const published = await agent.patch(`/admin/products/${productId}/publish`).send({ isPublished: true });
+        expect(published.status).toBe(200);
+        expect(published.body.data).toMatchObject({ priceInPaise: 100000, originalPriceInPaise: 120000 });
+        const publicProduct = await request(app).get(`/products/${published.body.data.slug}`);
+        expect(publicProduct.status).toBe(200);
+        expect(publicProduct.body.data).toMatchObject({ priceInPaise: 100000, originalPriceInPaise: 120000 });
         expect((await agent.patch(`/admin/products/${productId}/publish`).send({ isPublished: false })).status).toBe(200);
         expect((await agent.post(`/admin/products/${productId}/inventory`).send({ quantity: 3, reason: `${role} stock receipt` })).status).toBe(200);
         const history = await agent.get("/admin/inventory/history");
@@ -128,6 +148,43 @@ if (!testDatabaseUrl) {
       expect((await agent.put("/admin/settings/integration-test").send({ value: "not allowed" })).status).toBe(403);
       expect((await agent.patch(`/admin/products/${productIds[0]}/publish`).send({ isPublished: true })).status).toBe(403);
       expect((await agent.post(`/admin/products/${productIds[0]}/inventory`).send({ quantity: 1, reason: "not allowed" })).status).toBe(403);
+    });
+
+    it("limits staff management to operational roles and protects Founder accounts", async () => {
+      const agent = await login(users.founder.email);
+      const listed = await agent.get("/admin/staff");
+      expect(listed.status).toBe(200);
+      expect(listed.body.data.every((user: { role: string }) => ["ADMIN", "STAFF"].includes(user.role))).toBe(true);
+      expect(listed.body.data.some((user: { id: string }) => user.id === users.customer.id)).toBe(false);
+      expect(listed.body.data.some((user: { id: string }) => user.id === users.founder.id)).toBe(false);
+      expect((await (await login(users.admin.email)).get("/admin/staff")).status).toBe(200);
+
+      const escalateCustomer = await agent.patch(`/admin/staff/${users.customer.id}`).send({ role: "ADMIN" });
+      expect(escalateCustomer.status).toBe(404);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: users.customer.id }, select: { role: true } })).role).toBe("CUSTOMER");
+
+      const deactivateFounder = await agent.patch(`/admin/staff/${users.founder.id}`).send({ isActive: false });
+      expect(deactivateFounder.status).toBe(403);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: users.founder.id }, select: { isActive: true } })).isActive).toBe(true);
+    });
+
+    it("prevents disabling the last active Founder or Admin", async () => {
+      await prisma.user.updateMany({
+        where: { id: { in: [users.founder.id, users.admin.id] } },
+        data: { isActive: false },
+      });
+      try {
+        const agent = await login(users.lastAdmin.email);
+        const response = await agent.patch(`/admin/staff/${users.lastAdmin.id}`).send({ isActive: false });
+        expect(response.status).toBe(409);
+        expect(response.body.error.code).toBe("LAST_ACTIVE_ADMIN");
+        expect((await prisma.user.findUniqueOrThrow({ where: { id: users.lastAdmin.id }, select: { isActive: true } })).isActive).toBe(true);
+      } finally {
+        await prisma.user.updateMany({
+          where: { id: { in: [users.founder.id, users.admin.id] } },
+          data: { isActive: true },
+        });
+      }
     });
   });
 }

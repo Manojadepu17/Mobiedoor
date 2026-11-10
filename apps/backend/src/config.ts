@@ -21,7 +21,8 @@ function parsePort(value: string | undefined) {
 }
 
 function parseTrustProxy(value: string | undefined): false | number {
-  if (!value || value === "false" || value === "0") return false;
+  if (value === undefined || value.trim() === "") return isProduction ? 1 : false;
+  if (value === "false" || value === "0") return false;
   const hops = Number(value);
   if (Number.isInteger(hops) && hops > 0) return hops;
   throw new Error("TRUST_PROXY must be false or a positive integer.");
@@ -51,7 +52,6 @@ export const config = {
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME?.trim(),
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY?.trim(),
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET?.trim(),
-  uploadDirectory: process.env.UPLOAD_DIRECTORY?.trim() || "uploads",
 };
 
 if (isProduction && (!config.cloudinaryCloudName || !config.cloudinaryApiKey || !config.cloudinaryApiSecret)) {

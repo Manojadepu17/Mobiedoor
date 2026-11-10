@@ -1,15 +1,13 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { app, getCloudinaryErrorDetails, isCloudinaryImageUrl } from "./server.js";
+import { config } from "./config.js";
 
 describe("public API security and contracts", () => {
   it("extracts sanitized Cloudinary provider diagnostics", () => {
     expect(getCloudinaryErrorDetails({
-      error: { message: "Invalid API key", name: "Error", code: "401", http_code: 401 },
+      error: { message: "The secret value was echoed", name: "Error", code: "401", http_code: 401 },
     }, 502)).toEqual({
-      cloudinaryErrorMessage: "Invalid API key",
-      cloudinaryErrorName: "Error",
-      cloudinaryErrorCode: "401",
       cloudinaryErrorStatus: 401,
     });
   });
@@ -20,13 +18,10 @@ describe("public API security and contracts", () => {
     expect(isCloudinaryImageUrl("https://example.com/product.jpg")).toBe(false);
   });
 
-  it("trusts exactly one Render proxy hop before rate limiting", async () => {
-    expect(app.get("trust proxy")).toBe(1);
+  it("uses the configured proxy trust policy before rate limiting", async () => {
+    expect(app.get("trust proxy")).toBe(config.trustProxy);
 
-    const response = await request(app)
-      .post("/auth/login")
-      .set("X-Forwarded-For", "203.0.113.10")
-      .send({ email: "not-an-email", password: "short" });
+    const response = await request(app).post("/auth/login").send({ email: "not-an-email", password: "short" });
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");

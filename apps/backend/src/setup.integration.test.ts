@@ -109,6 +109,19 @@ if (!testDatabaseUrl) {
       });
       expect(response.status).toBe(201);
       expect(response.body.data.role).toBe("CUSTOMER");
+      expect(response.headers["set-cookie"][0]).toContain("mobiedoor_session=");
+      expect(await prisma.session.count({ where: { user: { email } } })).toBe(1);
+      const sessionCookie = response.headers["set-cookie"][0].split(";")[0];
+      expect((await request(app).get("/auth/me").set("Cookie", sessionCookie)).status).toBe(200);
+
+      const duplicate = await request(app).post("/auth/register").send({
+        name: "Integration Customer",
+        email,
+        password: "customer-password-2026!",
+        confirmPassword: "customer-password-2026!",
+      });
+      expect(duplicate.status).toBe(409);
+      expect(await prisma.session.count({ where: { user: { email } } })).toBe(1);
     });
   });
 }

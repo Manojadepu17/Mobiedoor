@@ -11,14 +11,16 @@ import { imageSize } from "image-size";
 import { z } from "zod";
 import { Prisma, ProductAvailability, UserRole } from "@prisma/client";
 import { prisma } from "./lib/prisma.js";
-import { cleanupExpiredSessions, createSession, destroySession, hashPassword, recordActivity, requireAuth, requireRoles, verifyPassword } from "./auth.js";
+import { cleanupExpiredSessions, createSession, createSessionInTransaction, destroySession, hashPassword, recordActivity, requireAuth, requireRoles, setSessionCookie, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 
 const app = express();
-app.set("trust proxy", 1);
+app.set("trust proxy", config.trustProxy);
 const port = config.port;
 const MAX_PAGE_SIZE = 50;
+const MAX_DATABASE_PRICE_IN_PAISE = 2_147_483_647;
+const CLOUDINARY_UPLOAD_TIMEOUT_MS = 30_000;
 const adminRoles = [UserRole.FOUNDER, UserRole.ADMIN];
 
 export function isCloudinaryImageUrl(value: string) {
@@ -31,26 +33,21 @@ export function isCloudinaryImageUrl(value: string) {
 }
 
 type CloudinaryErrorBody = {
-  secure_url?: string;
-  error?: {
-    message?: string;
-    name?: string;
-    code?: string | number;
-    http_code?: number;
-    status?: number;
-    statusCode?: number;
-  };
+  secure_url?: unknown;
+  error?: unknown;
 };
 
 export function getCloudinaryErrorDetails(body: CloudinaryErrorBody, responseStatus: number) {
-  const providerError = body.error;
-  const status = providerError?.http_code ?? providerError?.status ?? providerError?.statusCode ?? responseStatus;
+  const providerError = isRecord(body.error) ? body.error : {};
+  const providerStatus = [providerError.http_code, providerError.status, providerError.statusCode]
+    .find((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599);
   return {
-    cloudinaryErrorMessage: providerError?.message?.trim() || "Cloudinary returned an invalid image response.",
-    cloudinaryErrorName: providerError?.name,
-    cloudinaryErrorCode: providerError?.code,
-    cloudinaryErrorStatus: status,
+    cloudinaryErrorStatus: providerStatus ?? responseStatus,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const publicProductSelect = {
@@ -91,16 +88,23 @@ const registrationSchema = z.object({
   password: z.string().min(10).max(200),
   confirmPassword: z.string().min(10).max(200),
 }).refine(input => input.password === input.confirmPassword, { message: "Passwords do not match.", path: ["confirmPassword"] });
-const productSchema = z.object({
+const productFieldsSchema = z.object({
   name: z.string().trim().min(2).max(150), sku: z.string().trim().min(1).max(80),
   brand: z.string().trim().min(2).max(80), model: z.string().trim().min(1).max(120),
   slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(180),
-  description: z.string().trim().min(10).max(10000), priceInPaise: z.coerce.number().int().nonnegative(),
-  originalPriceInPaise: z.coerce.number().int().nonnegative().optional(), condition: z.enum(["LIKE_NEW", "EXCELLENT", "GOOD", "FAIR"]),
+  description: z.string().trim().min(10).max(10000), priceInPaise: z.number().int().min(0).max(MAX_DATABASE_PRICE_IN_PAISE),
+  originalPriceInPaise: z.number().int().min(0).max(MAX_DATABASE_PRICE_IN_PAISE).nullable().optional(), condition: z.enum(["LIKE_NEW", "EXCELLENT", "GOOD", "FAIR"]),
   category: z.string().trim().min(2).max(80), stockQuantity: z.coerce.number().int().min(0).max(100000),
   warrantyMonths: z.coerce.number().int().min(0).max(120).optional(), specifications: z.record(z.string(), z.unknown()).default({}),
   imageUrls: z.array(z.string().url().refine(isCloudinaryImageUrl, "Product images must use Cloudinary HTTPS URLs.")).max(20).default([]), isPublished: z.boolean().default(false),
 });
+function validateProductPrices(input: { priceInPaise?: number; originalPriceInPaise?: number | null }, context: z.RefinementCtx) {
+  if (input.priceInPaise !== undefined && input.originalPriceInPaise != null && input.originalPriceInPaise <= input.priceInPaise) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["originalPriceInPaise"], message: "Original price must be greater than the selling price." });
+  }
+}
+const productSchema = productFieldsSchema.superRefine(validateProductPrices);
+const productUpdateSchema = productFieldsSchema.partial().superRefine(validateProductPrices);
 const statusSchema = z.object({ status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "ARCHIVED"]).optional(), adminNotes: z.string().trim().max(5000).optional() }).refine(input => input.status !== undefined || input.adminNotes !== undefined, "A status or note is required.");
 const staffSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(10).max(200), role: z.enum(["ADMIN", "STAFF"]) });
 const staffUpdateSchema = z.object({ name: z.string().trim().min(2).max(100).optional(), email: z.string().trim().email().max(254).optional(), password: z.string().min(10).max(200).optional(), role: z.enum(["ADMIN", "STAFF"]).optional(), isActive: z.boolean().optional() });
@@ -191,6 +195,7 @@ app.post("/auth/login", loginLimiter, async (request, response, next) => {
     const { email, password } = loginSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !(await verifyPassword(password, user.passwordHash))) { response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Email or password is incorrect." } }); return; }
+    if (!user.isActive) { response.status(403).json({ error: { code: "ACCOUNT_INACTIVE", message: "This account is inactive. Contact an administrator for assistance." } }); return; }
     const authUser = { id: user.id, name: user.name, email: user.email, role: user.role };
     await createSession(authUser, response);
     response.json({ data: authUser });
@@ -243,13 +248,17 @@ app.post("/auth/setup", setupLimiter, async (request, response, next) => {
 app.post("/auth/register", publicMutationLimiter, async (request, response, next) => {
   try {
     const input = registrationSchema.parse(request.body);
-    const user = await prisma.user.create({
-      data: { name: input.name, email: input.email, passwordHash: await hashPassword(input.password), role: UserRole.CUSTOMER },
-      select: { id: true, name: true, email: true, role: true },
+    const passwordHash = await hashPassword(input.password);
+    const { user, token } = await prisma.$transaction(async transaction => {
+      const createdUser = await transaction.user.create({
+        data: { name: input.name, email: input.email, passwordHash, role: UserRole.CUSTOMER },
+        select: { id: true, name: true, email: true, role: true },
+      });
+      const authUser = { id: createdUser.id, name: createdUser.name, email: createdUser.email, role: createdUser.role };
+      return { user: authUser, token: await createSessionInTransaction(authUser, transaction) };
     });
-    const authUser = { id: user.id, name: user.name, email: user.email, role: user.role };
-    await createSession(authUser, response);
-    response.status(201).json({ data: authUser, message: "Your customer account has been created." });
+    setSessionCookie(response, token);
+    response.status(201).json({ data: user, message: "Your customer account has been created." });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       response.status(409).json({ error: { code: "EMAIL_ALREADY_REGISTERED", message: "An account with that email already exists." } });
@@ -297,17 +306,28 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
       let cloudinaryResponse: Response;
       let cloudinaryBody: CloudinaryErrorBody;
       try {
-        cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, { method: "POST", body: form });
-        cloudinaryBody = await cloudinaryResponse.json() as CloudinaryErrorBody;
+        cloudinaryResponse = await fetch(`https://api.cloudinary.com/v1_1/${cloudinaryCloudName}/image/upload`, {
+          method: "POST",
+          body: form,
+          signal: AbortSignal.timeout(CLOUDINARY_UPLOAD_TIMEOUT_MS),
+        });
+        const responseBody: unknown = await cloudinaryResponse.json();
+        cloudinaryBody = isRecord(responseBody)
+          ? { secure_url: responseBody.secure_url, error: responseBody.error }
+          : {};
       } catch (error) {
-        logger.error("Cloudinary image upload request failed", error);
-        response.status(502).json({ error: { code: "IMAGE_STORAGE_UNAVAILABLE", message: "Cloudinary could not be reached. Check the backend network and try again." } });
+        const timedOut = error instanceof Error && error.name === "TimeoutError";
+        logger.error("Cloudinary image upload request failed", undefined, { timedOut });
+        response.status(502).json({ error: {
+          code: timedOut ? "IMAGE_STORAGE_TIMEOUT" : "IMAGE_STORAGE_UNAVAILABLE",
+          message: timedOut ? "The image upload timed out. Please try again." : "Cloudinary could not be reached. Please try again.",
+        } });
         return;
       }
-      if (!cloudinaryResponse.ok || !cloudinaryBody.secure_url || !isCloudinaryImageUrl(cloudinaryBody.secure_url)) {
+      if (!cloudinaryResponse.ok || typeof cloudinaryBody.secure_url !== "string" || !isCloudinaryImageUrl(cloudinaryBody.secure_url)) {
         const diagnostics = getCloudinaryErrorDetails(cloudinaryBody, cloudinaryResponse.status);
         logger.error("Cloudinary image upload failed", undefined, diagnostics);
-        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: diagnostics.cloudinaryErrorMessage === "Cloudinary returned an invalid image response." ? "Cloudinary returned an invalid image response. Check the backend Cloudinary configuration." : `Cloudinary rejected the image: ${diagnostics.cloudinaryErrorMessage}` } });
+        response.status(502).json({ error: { code: "IMAGE_STORAGE_FAILED", message: "Cloudinary rejected the image. Check the backend configuration and try again." } });
         return;
       }
       await recordActivity(request.user!.id, "UPLOAD", "PRODUCT_IMAGE", publicId);
@@ -353,8 +373,20 @@ app.post("/admin/products", requireAuth, requireRoles(...adminRoles), adminMutat
 });
 app.patch("/admin/products/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
   try {
-    const input = productSchema.partial().parse(request.body);
+    const input = productUpdateSchema.parse(request.body);
     const productId = getParam(request, "id");
+    const currentPrices = await prisma.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { priceInPaise: true, originalPriceInPaise: true },
+    });
+    const sellingPrice = input.priceInPaise ?? currentPrices.priceInPaise;
+    const originalPrice = Object.hasOwn(input, "originalPriceInPaise")
+      ? input.originalPriceInPaise
+      : currentPrices.originalPriceInPaise;
+    if (originalPrice != null && originalPrice <= sellingPrice) {
+      response.status(400).json({ error: { code: "INVALID_PRODUCT_PRICES", message: "Original price must be greater than the selling price." } });
+      return;
+    }
     const stock = input.stockQuantity;
     const availability = stock === undefined ? undefined : stock === 0 ? ProductAvailability.OUT_OF_STOCK : stock <= 3 ? ProductAvailability.LOW_STOCK : ProductAvailability.IN_STOCK;
     const { specifications, imageUrls, ...scalarInput } = input;
@@ -440,7 +472,8 @@ async function updateEnquiry(request: express.Request, response: express.Respons
 }
 
 const staffSelect = { id: true, name: true, email: true, role: true, isActive: true, createdAt: true } as const;
-app.get("/admin/staff", requireAuth, requireRoles(...adminRoles), async (_request, response, next) => { try { response.json({ data: await prisma.user.findMany({ orderBy: { createdAt: "desc" }, select: staffSelect }) }); } catch (error) { next(error); } });
+const operationalStaffRoles: UserRole[] = [UserRole.ADMIN, UserRole.STAFF];
+app.get("/admin/staff", requireAuth, requireRoles(...adminRoles), async (_request, response, next) => { try { response.json({ data: await prisma.user.findMany({ where: { role: { in: operationalStaffRoles } }, orderBy: { createdAt: "desc" }, select: staffSelect }) }); } catch (error) { next(error); } });
 app.post("/admin/staff", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
   try { const input = staffSchema.parse(request.body); const user = await prisma.user.create({ data: { name: input.name, email: input.email, role: input.role, passwordHash: await hashPassword(input.password) }, select: staffSelect }); await recordActivity(request.user!.id, "CREATE", "STAFF", user.id); response.status(201).json({ data: user }); } catch (error) { next(error); }
 });
@@ -448,10 +481,46 @@ app.patch("/admin/staff/:id", requireAuth, requireRoles(...adminRoles), adminMut
   try {
     const input = staffUpdateSchema.parse(request.body);
     const { password, ...rest } = input;
-    const user = await prisma.user.update({ where: { id: getParam(request, "id") }, data: { ...rest, ...(password ? { passwordHash: await hashPassword(password) } : {}) }, select: staffSelect });
+    const userId = getParam(request, "id");
+    const passwordHash = password ? await hashPassword(password) : undefined;
+    const user = await prisma.$transaction(async transaction => {
+      const current = await transaction.user.findUnique({
+        where: { id: userId },
+        select: { role: true, isActive: true },
+      });
+      if (current?.role === UserRole.FOUNDER) {
+        throw new StaffManagementError(403, "FOUNDER_PROTECTED", "Founder accounts cannot be changed through staff management.");
+      }
+      if (!current || !operationalStaffRoles.includes(current.role)) {
+        throw new StaffManagementError(404, "STAFF_ACCOUNT_NOT_FOUND", "The operational staff account was not found.");
+      }
+      const removesLastPrivilegedAccount = current.role === UserRole.ADMIN && current.isActive &&
+        (input.isActive === false || input.role === UserRole.STAFF);
+      if (removesLastPrivilegedAccount) {
+        const activePrivilegedUsers = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM users
+          WHERE role IN ('FOUNDER', 'ADMIN') AND is_active = 1
+          FOR UPDATE
+        `;
+        if (activePrivilegedUsers.length <= 1) {
+          throw new StaffManagementError(409, "LAST_ACTIVE_ADMIN", "At least one active Founder or Admin account must remain.");
+        }
+      }
+      return transaction.user.update({
+        where: { id: userId },
+        data: { ...rest, ...(passwordHash ? { passwordHash } : {}) },
+        select: staffSelect,
+      });
+    });
     await recordActivity(request.user!.id, "UPDATE", "STAFF", user.id, { fields: Object.keys(input).filter(field => field !== "password") });
     response.json({ data: user });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (error instanceof StaffManagementError) {
+      response.status(error.status).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+    next(error);
+  }
 });
 app.get("/admin/activity", requireAuth, requireRoles(...adminRoles, UserRole.STAFF), async (request, response, next) => {
   try {
@@ -472,6 +541,11 @@ function getParam(request: express.Request, name: string) {
 }
 
 class SetupUnavailableError extends Error {}
+class StaffManagementError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) {
+    super(message);
+  }
+}
 
 function isSetupSecretConfigured() {
   return Boolean(config.initialSetupSecret && config.initialSetupSecret.length >= 32);

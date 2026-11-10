@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import { UserRole } from "@prisma/client";
+import { Prisma, UserRole } from "@prisma/client";
 import { prisma } from "./lib/prisma.js";
 
 const SESSION_COOKIE = "mobiedoor_session";
@@ -31,6 +31,18 @@ export async function createSession(user: AuthUser, response: Response) {
   await prisma.session.create({
     data: { tokenHash: hashToken(token), userId: user.id, expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
   });
+  setSessionCookie(response, token);
+}
+
+export async function createSessionInTransaction(user: AuthUser, transaction: Prisma.TransactionClient) {
+  const token = randomBytes(32).toString("base64url");
+  await transaction.session.create({
+    data: { tokenHash: hashToken(token), userId: user.id, expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
+  });
+  return token;
+}
+
+export function setSessionCookie(response: Response, token: string) {
   response.setHeader("Set-Cookie", `${SESSION_COOKIE}=${token}; ${cookieAttributes()}; Max-Age=${SESSION_TTL_MS / 1000}`);
 }
 
