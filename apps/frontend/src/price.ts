@@ -14,6 +14,13 @@ export function inrToPaise(value: string | number) {
   return amount;
 }
 
+export function adminPricesToPaise(priceInr: string | number, originalPriceInr?: string | number | null) {
+  return {
+    priceInPaise: inrToPaise(priceInr),
+    originalPriceInPaise: originalPriceInr == null ? originalPriceInr : inrToPaise(originalPriceInr),
+  };
+}
+
 export function paiseToInr(paise: number) {
   if (!Number.isSafeInteger(paise) || paise < 0 || paise > MAX_DATABASE_PRICE_IN_PAISE) {
     throw new Error("Stored price must be a non-negative integer.");

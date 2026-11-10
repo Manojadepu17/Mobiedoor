@@ -1,6 +1,6 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { app, getCloudinaryErrorDetails, isCloudinaryImageUrl } from "./server.js";
+import { app, generateCloudinarySignature, getCloudinaryErrorDetails, isCloudinaryImageUrl } from "./server.js";
 import { config } from "./config.js";
 
 describe("public API security and contracts", () => {
@@ -16,6 +16,11 @@ describe("public API security and contracts", () => {
     expect(isCloudinaryImageUrl("https://res.cloudinary.com/demo/image/upload/sample.jpg")).toBe(true);
     expect(isCloudinaryImageUrl("http://localhost:4000/uploads/product.jpg")).toBe(false);
     expect(isCloudinaryImageUrl("https://example.com/product.jpg")).toBe(false);
+  });
+
+  it("generates deterministic Cloudinary SHA-1 upload signatures", () => {
+    expect(generateCloudinarySignature("product-test", 1700000000, "api-secret"))
+      .toBe("1749029a02e4cb615bc1d201187c5f7f2957238a");
   });
 
   it("uses the configured proxy trust policy before rate limiting", async () => {

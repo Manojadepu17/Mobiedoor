@@ -8,7 +8,7 @@ import {
   Sparkles, Truck, X, Wrench, Youtube, LogOut, LayoutDashboard, Plus, Trash2, Users, type LucideIcon,
 } from "lucide-react";
 import Cropper, { type Area, type Point } from "react-easy-crop";
-import { discountPercent, formatInr, inrToPaise, paiseToInr } from "./price";
+import { adminPricesToPaise, discountPercent, formatInr, paiseToInr } from "./price";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -358,7 +358,8 @@ function AdminProductForm({ productId }: { productId?: string }) {
     setImageError("");
     const values = Object.fromEntries(new FormData(event.currentTarget).entries());
     const { priceInr, originalPriceInr, ...productValues } = values;
-    const payload = { ...productValues, priceInPaise: inrToPaise(String(priceInr)), originalPriceInPaise: originalPriceInr ? inrToPaise(String(originalPriceInr)) : productId ? null : undefined, stockQuantity: Number(values.stockQuantity), warrantyMonths: values.warrantyMonths ? Number(values.warrantyMonths) : undefined, imageUrls, specifications: {} };
+    const prices = adminPricesToPaise(String(priceInr), originalPriceInr ? String(originalPriceInr) : productId ? null : undefined);
+    const payload = { ...productValues, ...prices, stockQuantity: Number(values.stockQuantity), warrantyMonths: values.warrantyMonths ? Number(values.warrantyMonths) : undefined, imageUrls, specifications: {} };
     mutation.mutate(payload);
   };
   if (me.isLoading) return <div className="admin-loading">Checking secure session...</div>;

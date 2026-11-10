@@ -56,8 +56,8 @@ if (!testDatabaseUrl) {
       model: suffix,
       slug: `${fixturePrefix}-${suffix}`.toLowerCase(),
       description: "Controlled integration-test product record.",
-      priceInPaise: 100000,
-      originalPriceInPaise: 120000,
+      priceInPaise: 6_500_000,
+      originalPriceInPaise: 10_000_000,
       condition: "EXCELLENT",
       category: "Integration",
       stockQuantity: 2,
@@ -66,8 +66,8 @@ if (!testDatabaseUrl) {
       isPublished: false,
     });
     expect(response.status).toBe(201);
-    expect(response.body.data.priceInPaise).toBe(100000);
-    expect(response.body.data.originalPriceInPaise).toBe(120000);
+    expect(response.body.data.priceInPaise).toBe(6_500_000);
+    expect(response.body.data.originalPriceInPaise).toBe(10_000_000);
     productIds.push(response.body.data.id);
     return response.body.data.id as string;
   }
@@ -112,13 +112,19 @@ if (!testDatabaseUrl) {
       for (const [role, email] of [["founder", users.founder.email], ["admin", users.admin.email]] as const) {
         const agent = await login(email);
         const productId = await createProduct(agent, role);
-        expect((await agent.patch(`/admin/products/${productId}`).send({ description: `Edited by ${role}` })).status).toBe(200);
+        const edited = await agent.patch(`/admin/products/${productId}`).send({
+          description: `Edited by ${role}`,
+          priceInPaise: 6_500_000,
+          originalPriceInPaise: 10_000_000,
+        });
+        expect(edited.status).toBe(200);
+        expect(edited.body.data).toMatchObject({ priceInPaise: 6_500_000, originalPriceInPaise: 10_000_000 });
         const published = await agent.patch(`/admin/products/${productId}/publish`).send({ isPublished: true });
         expect(published.status).toBe(200);
-        expect(published.body.data).toMatchObject({ priceInPaise: 100000, originalPriceInPaise: 120000 });
+        expect(published.body.data).toMatchObject({ priceInPaise: 6_500_000, originalPriceInPaise: 10_000_000 });
         const publicProduct = await request(app).get(`/products/${published.body.data.slug}`);
         expect(publicProduct.status).toBe(200);
-        expect(publicProduct.body.data).toMatchObject({ priceInPaise: 100000, originalPriceInPaise: 120000 });
+        expect(publicProduct.body.data).toMatchObject({ priceInPaise: 6_500_000, originalPriceInPaise: 10_000_000 });
         expect((await agent.patch(`/admin/products/${productId}/publish`).send({ isPublished: false })).status).toBe(200);
         expect((await agent.post(`/admin/products/${productId}/inventory`).send({ quantity: 3, reason: `${role} stock receipt` })).status).toBe(200);
         const history = await agent.get("/admin/inventory/history");

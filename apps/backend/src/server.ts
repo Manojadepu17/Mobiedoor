@@ -4,7 +4,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import multer from "multer";
 import { fileTypeFromBuffer } from "file-type";
 import { imageSize } from "image-size";
@@ -30,6 +30,11 @@ export function isCloudinaryImageUrl(value: string) {
   } catch {
     return false;
   }
+}
+
+export function generateCloudinarySignature(publicId: string, timestamp: number, apiSecret: string) {
+  const signingInput = `folder=mobiedoor/products&public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+  return createHash("sha1").update(signingInput).digest("hex");
 }
 
 type CloudinaryErrorBody = {
@@ -294,7 +299,7 @@ app.post("/admin/product-images", requireAuth, requireRoles(...adminRoles), admi
     if (cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret) {
       const timestamp = Math.floor(Date.now() / 1000);
       const publicId = `product-${randomUUID()}`;
-      const signature = createHmac("sha1", cloudinaryApiSecret).update(`folder=mobiedoor/products&public_id=${publicId}&timestamp=${timestamp}`).digest("hex");
+      const signature = generateCloudinarySignature(publicId, timestamp, cloudinaryApiSecret);
       const form = new FormData();
       const fileBytes = file.buffer.buffer.slice(file.buffer.byteOffset, file.buffer.byteOffset + file.buffer.byteLength) as ArrayBuffer;
       form.append("file", new Blob([fileBytes], { type: detected.mime }), file.originalname);
