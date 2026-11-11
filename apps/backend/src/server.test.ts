@@ -1,15 +1,79 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
-import { app, generateCloudinarySignature, getCloudinaryErrorDetails, isCloudinaryImageUrl } from "./server.js";
+import { describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
+import { app, generateCloudinarySignature, getCloudinaryErrorDetails, isCloudinaryImageUrl, isProductInventoryHistoryConstraintError } from "./server.js";
 import { config } from "./config.js";
+import { prisma } from "./lib/prisma.js";
+
+vi.mock("./auth.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("./auth.js")>();
+  return { ...actual, cleanupExpiredSessions: vi.fn().mockResolvedValue({ count: 0 }) };
+});
 
 describe("public API security and contracts", () => {
+  it("adds no-store cache protection to successful API responses", async () => {
+    const response = await request(app)
+      .options("/auth/login")
+      .set("Origin", config.frontendUrl)
+      .set("Access-Control-Request-Method", "POST");
+
+    expect(response.status).toBe(204);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("adds no-store cache protection to API error responses", async () => {
+    const response = await request(app).post("/auth/login").send({ email: "not-an-email", password: "short" });
+
+    expect(response.status).toBe(400);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("adds no-store cache protection to a successful health response without querying a database", async () => {
+    const query = vi.spyOn(prisma, "$queryRaw").mockResolvedValueOnce([] as never);
+
+    try {
+      const response = await request(app).get("/health");
+
+      expect(query).toHaveBeenCalledOnce();
+      expect(response.status).toBe(200);
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+    } finally {
+      query.mockRestore();
+    }
+  });
+
+  it("adds no-store cache protection to an unexpected server error without querying a database", async () => {
+    const query = vi.spyOn(prisma, "$queryRaw").mockRejectedValueOnce(new Error("Simulated test failure"));
+
+    try {
+      const response = await request(app).get("/health");
+
+      expect(query).toHaveBeenCalledOnce();
+      expect(response.status).toBe(500);
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+    } finally {
+      query.mockRestore();
+    }
+  });
+
   it("extracts sanitized Cloudinary provider diagnostics", () => {
     expect(getCloudinaryErrorDetails({
       error: { message: "The secret value was echoed", name: "Error", code: "401", http_code: 401 },
     }, 502)).toEqual({
       cloudinaryErrorStatus: 401,
     });
+  });
+
+  it("recognizes only Prisma foreign-key errors as inventory-history deletion conflicts", () => {
+    expect(isProductInventoryHistoryConstraintError(new Prisma.PrismaClientKnownRequestError("Foreign key constraint failed", {
+      code: "P2003",
+      clientVersion: "test",
+    }))).toBe(true);
+    expect(isProductInventoryHistoryConstraintError(new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+      code: "P2002",
+      clientVersion: "test",
+    }))).toBe(false);
+    expect(isProductInventoryHistoryConstraintError({ code: "P2003" })).toBe(false);
   });
 
   it("accepts only HTTPS Cloudinary image URLs for product records", () => {
@@ -32,10 +96,19 @@ describe("public API security and contracts", () => {
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
-  it("reports a database-backed healthy service", async () => {
-    const response = await request(app).get("/health");
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ status: "ok", database: "ok" });
+  it("reports a healthy service without requiring a database connection", async () => {
+    const query = vi.spyOn(prisma, "$queryRaw").mockResolvedValueOnce([] as never);
+
+    try {
+      const response = await request(app).get("/health");
+
+      expect(query).toHaveBeenCalledOnce();
+      expect(response.status).toBe(200);
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+      expect(response.body).toMatchObject({ status: "ok", service: "mobiedoor-api", database: "ok" });
+    } finally {
+      query.mockRestore();
+    }
   });
 
   it("returns a published-product collection envelope", async () => {
@@ -78,6 +151,9 @@ describe("public API security and contracts", () => {
     });
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(response.body.error.details).toMatchObject({
+      confirmPassword: ["Passwords do not match."],
+    });
   });
 
   it("denies initial setup without the backend setup secret", async () => {

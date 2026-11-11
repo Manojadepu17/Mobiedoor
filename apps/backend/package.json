@@ -12,8 +12,8 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "test": "vitest run",
-    "test:integration": "vitest run src/integration.test.ts",
+    "test": "vitest run --no-file-parallelism",
+    "test:integration": "vitest run src/integration.test.ts src/setup.integration.test.ts --no-file-parallelism",
     "db:deploy": "prisma migrate deploy",
     "provision:admin": "tsx src/scripts/provision-admin.ts",
     "provision:founder": "tsx src/scripts/provision-founder.ts"
@@ -29,7 +29,7 @@
     "helmet": "^8.0.0",
     "image-size": "^2.1.0",
     "multer": "^2.5.0",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

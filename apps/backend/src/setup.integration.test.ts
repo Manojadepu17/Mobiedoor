@@ -1,5 +1,10 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  cleanupSetupIntegrationTestFixtures,
+  trackIntegrationFixtureDependents,
+  type IntegrationFixtureIds,
+} from "./integration-fixture-cleanup.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 const setupSecret = "integration-only-setup-secret-2026";
@@ -32,20 +37,53 @@ if (!testDatabaseUrl) {
   const { prisma } = await import("./lib/prisma.js");
   const fixturePrefix = `setup-integration-${Date.now()}`;
   const email = `${fixturePrefix}@example.test`;
+  let originalSetupCompletedAt: Date | null = null;
+  const fixtureIds: IntegrationFixtureIds = {
+    productIds: [],
+    userIds: [],
+    enquiryIds: [],
+    sessionIds: [],
+    activityLogIds: [],
+    inventoryAdjustmentIds: [],
+  };
 
-  async function resetSetupFixture() {
-    await prisma.session.deleteMany({ where: { user: { email: { startsWith: fixturePrefix } } } });
-    await prisma.user.deleteMany({ where: { email: { startsWith: fixturePrefix } } });
-    await prisma.initialSetupState.update({ where: { id: 1 }, data: { completedAt: null } });
+  async function cleanupCurrentSetupFixtures() {
+    const dependents = await trackIntegrationFixtureDependents(prisma, fixtureIds);
+    fixtureIds.sessionIds.push(...dependents.sessionIds);
+    fixtureIds.activityLogIds.push(...dependents.activityLogIds);
+    fixtureIds.inventoryAdjustmentIds.push(...dependents.inventoryAdjustmentIds);
+    await cleanupSetupIntegrationTestFixtures(prisma, fixtureIds);
   }
 
   beforeAll(async () => {
-    await resetSetupFixture();
+    const state = await prisma.initialSetupState.findUniqueOrThrow({ where: { id: 1 }, select: { completedAt: true } });
+    originalSetupCompletedAt = state.completedAt;
+    const privilegedCount = await prisma.user.count({ where: { role: { in: ["FOUNDER", "ADMIN"] } } });
+    if (privilegedCount > 0) {
+      throw new Error("Initial setup integration tests require a test database without unrelated Founder or Admin accounts.");
+    }
+  });
+
+  beforeEach(async () => {
+    await cleanupCurrentSetupFixtures();
+    const privilegedCount = await prisma.user.count({ where: { role: { in: ["FOUNDER", "ADMIN"] } } });
+    if (privilegedCount > 0) {
+      throw new Error("Initial setup integration tests require a test database without unrelated Founder or Admin accounts.");
+    }
+    await prisma.initialSetupState.update({ where: { id: 1 }, data: { completedAt: null } });
+  });
+
+  afterEach(async () => {
+    await cleanupCurrentSetupFixtures();
   });
 
   afterAll(async () => {
-    await resetSetupFixture();
-    await prisma.$disconnect();
+    try {
+      await cleanupCurrentSetupFixtures();
+      await prisma.initialSetupState.update({ where: { id: 1 }, data: { completedAt: originalSetupCompletedAt } });
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   describe("initial setup security", () => {
@@ -57,6 +95,7 @@ if (!testDatabaseUrl) {
         confirmPassword: "founder-password-2026!",
         setupSecret,
       });
+      if (typeof created.body.data?.id === "string") fixtureIds.userIds.push(created.body.data.id);
       expect(created.status).toBe(201);
       expect(created.body.data).toMatchObject({ email, role: "FOUNDER" });
       expect(created.body.data.passwordHash).toBeUndefined();
@@ -72,7 +111,6 @@ if (!testDatabaseUrl) {
     });
 
     it("denies setup with an invalid secret", async () => {
-      await resetSetupFixture();
       const response = await request(app).post("/auth/setup").send({
         name: "Unauthorized Founder",
         email,
@@ -85,7 +123,6 @@ if (!testDatabaseUrl) {
     });
 
     it("allows only one concurrent initial setup request", async () => {
-      await resetSetupFixture();
       const responses = await Promise.all([1, 2].map(index => request(app).post("/auth/setup").send({
         name: `Concurrent Founder ${index}`,
         email: `${fixturePrefix}-${index}@example.test`,
@@ -93,13 +130,15 @@ if (!testDatabaseUrl) {
         confirmPassword: "founder-password-2026!",
         setupSecret,
       })));
+      fixtureIds.userIds.push(...responses
+        .filter(response => response.status === 201 && typeof response.body.data?.id === "string")
+        .map(response => response.body.data.id as string));
       expect(responses.filter(response => response.status === 201)).toHaveLength(1);
       expect(responses.filter(response => response.status === 410)).toHaveLength(1);
       expect(await prisma.user.count({ where: { role: "FOUNDER", email: { startsWith: fixturePrefix } } })).toBe(1);
     });
 
     it("always creates a customer despite a client-supplied privileged role", async () => {
-      await resetSetupFixture();
       const response = await request(app).post("/auth/register").send({
         name: "Integration Customer",
         email,
@@ -107,6 +146,7 @@ if (!testDatabaseUrl) {
         confirmPassword: "customer-password-2026!",
         role: "ADMIN",
       });
+      if (typeof response.body.data?.id === "string") fixtureIds.userIds.push(response.body.data.id);
       expect(response.status).toBe(201);
       expect(response.body.data.role).toBe("CUSTOMER");
       expect(response.headers["set-cookie"][0]).toContain("mobiedoor_session=");

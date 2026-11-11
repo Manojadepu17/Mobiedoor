@@ -17,9 +17,14 @@ import { logger } from "./logger.js";
 
 const app = express();
 app.set("trust proxy", config.trustProxy);
+app.use((_request, response, next) => {
+  response.setHeader("Cache-Control", "private, no-store");
+  next();
+});
 const port = config.port;
 const MAX_PAGE_SIZE = 50;
 const MAX_DATABASE_PRICE_IN_PAISE = 2_147_483_647;
+const MAX_DATABASE_STOCK_QUANTITY = 2_147_483_647;
 const CLOUDINARY_UPLOAD_TIMEOUT_MS = 30_000;
 const adminRoles = [UserRole.FOUNDER, UserRole.ADMIN];
 
@@ -49,6 +54,10 @@ export function getCloudinaryErrorDetails(body: CloudinaryErrorBody, responseSta
   return {
     cloudinaryErrorStatus: providerStatus ?? responseStatus,
   };
+}
+
+export function isProductInventoryHistoryConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,7 +118,7 @@ function validateProductPrices(input: { priceInPaise?: number; originalPriceInPa
   }
 }
 const productSchema = productFieldsSchema.superRefine(validateProductPrices);
-const productUpdateSchema = productFieldsSchema.partial().superRefine(validateProductPrices);
+const productUpdateSchema = productFieldsSchema.omit({ stockQuantity: true }).partial().superRefine(validateProductPrices);
 const statusSchema = z.object({ status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "ARCHIVED"]).optional(), adminNotes: z.string().trim().max(5000).optional() }).refine(input => input.status !== undefined || input.adminNotes !== undefined, "A status or note is required.");
 const staffSchema = z.object({ name: z.string().trim().min(2).max(100), email: z.string().trim().email().max(254), password: z.string().min(10).max(200), role: z.enum(["ADMIN", "STAFF"]) });
 const staffUpdateSchema = z.object({ name: z.string().trim().min(2).max(100).optional(), email: z.string().trim().email().max(254).optional(), password: z.string().min(10).max(200).optional(), role: z.enum(["ADMIN", "STAFF"]).optional(), isActive: z.boolean().optional() });
@@ -378,6 +387,10 @@ app.post("/admin/products", requireAuth, requireRoles(...adminRoles), adminMutat
 });
 app.patch("/admin/products/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
   try {
+    if (isRecord(request.body) && Object.hasOwn(request.body, "stockQuantity")) {
+      response.status(400).json({ error: { code: "INVALID_INVENTORY", message: "Use the inventory adjustment endpoint to change stock." } });
+      return;
+    }
     const input = productUpdateSchema.parse(request.body);
     const productId = getParam(request, "id");
     const currentPrices = await prisma.product.findUniqueOrThrow({
@@ -392,16 +405,34 @@ app.patch("/admin/products/:id", requireAuth, requireRoles(...adminRoles), admin
       response.status(400).json({ error: { code: "INVALID_PRODUCT_PRICES", message: "Original price must be greater than the selling price." } });
       return;
     }
-    const stock = input.stockQuantity;
-    const availability = stock === undefined ? undefined : stock === 0 ? ProductAvailability.OUT_OF_STOCK : stock <= 3 ? ProductAvailability.LOW_STOCK : ProductAvailability.IN_STOCK;
     const { specifications, imageUrls, ...scalarInput } = input;
-    const product = await prisma.product.update({ where: { id: productId }, data: { ...scalarInput, ...(specifications ? { specifications: specifications as Prisma.InputJsonValue } : {}), ...(imageUrls ? { imageUrls: imageUrls as Prisma.InputJsonValue } : {}), ...(availability ? { availability } : {}) }, select: publicProductSelect });
+    const product = await prisma.product.update({ where: { id: productId }, data: { ...scalarInput, ...(specifications ? { specifications: specifications as Prisma.InputJsonValue } : {}), ...(imageUrls ? { imageUrls: imageUrls as Prisma.InputJsonValue } : {}) }, select: publicProductSelect });
     await recordActivity(request.user!.id, "UPDATE", "PRODUCT", product.id);
     response.json({ data: product });
   } catch (error) { next(error); }
 });
 app.delete("/admin/products/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
-  try { const productId = getParam(request, "id"); await prisma.product.delete({ where: { id: productId } }); await recordActivity(request.user!.id, "DELETE", "PRODUCT", productId); response.status(204).send(); } catch (error) { next(error); }
+  try {
+    const productId = getParam(request, "id");
+    const hasInventoryHistory = await prisma.$transaction(async transaction => {
+      const adjustmentCount = await transaction.inventoryAdjustment.count({ where: { productId } });
+      if (adjustmentCount > 0) return true;
+      await transaction.product.delete({ where: { id: productId } });
+      return false;
+    });
+    if (hasInventoryHistory) {
+      response.status(409).json({ error: { code: "PRODUCT_HAS_INVENTORY_HISTORY", message: "Products with inventory adjustment history cannot be deleted." } });
+      return;
+    }
+    await recordActivity(request.user!.id, "DELETE", "PRODUCT", productId);
+    response.status(204).send();
+  } catch (error) {
+    if (isProductInventoryHistoryConstraintError(error)) {
+      response.status(409).json({ error: { code: "PRODUCT_HAS_INVENTORY_HISTORY", message: "Products with inventory adjustment history cannot be deleted." } });
+      return;
+    }
+    next(error);
+  }
 });
 app.patch("/admin/products/:id/publish", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
   try { const productId = getParam(request, "id"); const isPublished = z.object({ isPublished: z.boolean() }).parse(request.body).isPublished; const product = await prisma.product.update({ where: { id: productId }, data: { isPublished }, select: publicProductSelect }); await recordActivity(request.user!.id, isPublished ? "PUBLISH" : "UNPUBLISH", "PRODUCT", product.id); response.json({ data: product }); } catch (error) { next(error); }
@@ -410,17 +441,56 @@ app.post("/admin/products/:id/inventory", requireAuth, requireRoles(...adminRole
   try {
     const input = z.object({ quantity: z.coerce.number().int().min(-100000).max(100000), reason: z.string().trim().min(3).max(255) }).parse(request.body);
     const productId = getParam(request, "id");
-    const product = await prisma.product.findUniqueOrThrow({ where: { id: productId }, select: { stockQuantity: true } });
-    const stockQuantity = product.stockQuantity + input.quantity;
-    if (stockQuantity < 0) { response.status(400).json({ error: { code: "INVALID_INVENTORY", message: "Inventory cannot become negative." } }); return; }
-    const availability = stockQuantity === 0 ? ProductAvailability.OUT_OF_STOCK : stockQuantity <= 3 ? ProductAvailability.LOW_STOCK : ProductAvailability.IN_STOCK;
     const updated = await prisma.$transaction(async transaction => {
-      const result = await transaction.product.update({ where: { id: productId }, data: { stockQuantity, availability }, select: publicProductSelect });
-      await transaction.inventoryAdjustment.create({ data: { productId, userId: request.user!.id, quantity: input.quantity, reason: input.reason } });
-      return result;
+      const minimumStock = input.quantity < 0 ? -input.quantity : 0;
+      const maximumStock = input.quantity > 0 ? MAX_DATABASE_STOCK_QUANTITY - input.quantity : undefined;
+      const adjustment = await transaction.product.updateMany({
+        where: {
+          id: productId,
+          stockQuantity: {
+            gte: minimumStock,
+            ...(maximumStock === undefined ? {} : { lte: maximumStock }),
+          },
+        },
+        data: { stockQuantity: { increment: input.quantity } },
+      });
+      if (adjustment.count === 0) {
+        const product = await transaction.product.findUniqueOrThrow({ where: { id: productId }, select: { stockQuantity: true } });
+        return {
+          errorMessage: product.stockQuantity + input.quantity < 0
+            ? "Inventory cannot become negative."
+            : "Inventory exceeds the maximum supported quantity.",
+        };
+      }
+
+      const product = await transaction.product.findUniqueOrThrow({ where: { id: productId }, select: { stockQuantity: true } });
+      const availability = product.stockQuantity === 0
+        ? ProductAvailability.OUT_OF_STOCK
+        : product.stockQuantity <= 3
+          ? ProductAvailability.LOW_STOCK
+          : ProductAvailability.IN_STOCK;
+      const result = await transaction.product.update({
+        where: { id: productId },
+        data: { availability },
+        select: publicProductSelect,
+      });
+      await transaction.inventoryAdjustment.create({
+        data: {
+          productId,
+          userId: request.user!.id,
+          quantity: input.quantity,
+          stockQuantityAfter: result.stockQuantity,
+          reason: input.reason,
+        },
+      });
+      return { result };
     });
-    await recordActivity(request.user!.id, "INVENTORY_ADJUSTMENT", "PRODUCT", updated.id, { quantity: input.quantity });
-    response.json({ data: updated });
+    if ("errorMessage" in updated) {
+      response.status(400).json({ error: { code: "INVALID_INVENTORY", message: updated.errorMessage } });
+      return;
+    }
+    await recordActivity(request.user!.id, "INVENTORY_ADJUSTMENT", "PRODUCT", updated.result.id, { quantity: input.quantity });
+    response.json({ data: updated.result });
   } catch (error) { next(error); }
 });
 

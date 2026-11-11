@@ -171,9 +171,10 @@ model InventoryAdjustment {
   productId    String   @map("product_id")
   userId       String   @map("user_id")
   quantity     Int
+  stockQuantityAfter Int? @map("stock_quantity_after")
   reason       String   @db.VarChar(255)
   createdAt    DateTime @default(now()) @map("created_at")
-  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
   user         User     @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([productId, createdAt])

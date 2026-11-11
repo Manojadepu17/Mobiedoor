@@ -50,9 +50,9 @@ Testing-only name:
 
 Production image uploads also require `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Store these only in the backend hosting provider's secret manager; never use `VITE_` names for secrets.
 
-Set `VITE_API_URL` in the frontend build environment to the backend's public HTTPS origin (for example, the Render service URL). Local development can use `apps/frontend/.env.example`. Production frontend builds fail when `VITE_API_URL` is missing rather than silently targeting localhost. Only public API origins belong in `VITE_` variables.
+The Vercel frontend sends production API requests through the same-origin `/api` external rewrite to the Render backend. Set the Vercel project's Production environment variable `VITE_API_URL` to exactly `/api`; production builds fail if it is missing or set to another value. Local development continues to use `http://localhost:4000` via `apps/frontend/.env.example`. Only public API origins belong in `VITE_` variables.
 
-Sessions are persisted in Prisma/MySQL and use an `HttpOnly` cookie at `/`. Local development uses `SameSite=Lax`; production uses `SameSite=None; Secure` because the Vercel frontend and Render API are cross-site. Production requires HTTPS. State-changing requests must include the configured frontend `Origin`; requests from other origins, or production requests without an origin, are rejected to protect cookie-authenticated operations from CSRF.
+Sessions are persisted in Prisma/MySQL and use an `HttpOnly` cookie at `/`. Local development uses `SameSite=Lax`; production uses `SameSite=None; Secure`. Production requires HTTPS. State-changing requests must include the configured frontend `Origin`; requests from other origins, or production requests without an origin, are rejected to protect cookie-authenticated operations from CSRF.
 
 The backend handles `SIGTERM` and `SIGINT`, stops accepting new requests, waits up to 10 seconds for active requests, disconnects Prisma, and then completes shutdown. Hosting platforms should send `SIGTERM` during graceful replacement. Rate limits currently use process memory; a shared store is required before running multiple backend instances.
 
@@ -60,7 +60,7 @@ The backend uses Express client-IP resolution for rate limiting and applies `TRU
 
 ## Frontend hosting and SPA routing
 
-The frontend uses `BrowserRouter`. [vercel.json](./vercel.json) rewrites non-API paths to `index.html`, so direct navigation and refreshes for `/admin`, `/products/:slug`, and nested routes work on Vercel. The rewrite intentionally excludes paths beginning with `/api/`; the current architecture uses a separately hosted backend and `VITE_API_URL`, so API traffic is not routed through this frontend deployment.
+The frontend uses `BrowserRouter`. [vercel.json](./vercel.json) first rewrites `/api/*` requests to the Render backend, then rewrites other application paths to `index.html`, so API calls and direct navigation or refreshes for `/admin`, `/products/:slug`, and nested routes work on Vercel.
 
 For another static host, configure its equivalent “all application routes to `index.html`” fallback while leaving API requests routed to the backend. Set the frontend build output to `apps/frontend/dist` and configure `VITE_API_URL` at build time.
 

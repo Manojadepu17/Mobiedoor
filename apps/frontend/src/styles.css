@@ -204,15 +204,34 @@ h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.1; letter-spacing: -.06em
 .catalogue-state h2 { font-size: 26px; margin-bottom: 9px; }
 .catalogue-state p { max-width: 470px; line-height: 1.65; font-size: 14px; }
 .catalogue-state .button { margin-top: 8px; }
+.catalogue-pagination { display: flex; align-items: center; justify-content: center; gap: 20px; margin-top: 32px; color: #567064; font-size: 13px; }
+.catalogue-pagination button { min-width: 100px; border: 1px solid #c8d8cc; background: #f1f7f2; color: #397158; padding: 10px 14px; font: inherit; cursor: pointer; }
+.catalogue-pagination button:disabled { opacity: .45; cursor: not-allowed; }
 .detail-page { min-height: 580px; }
-.detail-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; }
-.detail-image { height: 520px; background: #e9ece7; }
-.detail-image img { width: 100%; height: 100%; object-fit: cover; }
+.detail-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: start; }
+.detail-gallery { min-width: 0; }
+.detail-image { height: 520px; background: #e9ece7; overflow: hidden; }
+.detail-image img, .detail-image .image-fallback { width: 100%; height: 100%; object-fit: cover; }
+.detail-thumbnails { display: flex; gap: 12px; margin-top: 14px; overflow-x: auto; padding: 2px 2px 8px; }
+.detail-thumbnail { flex: 0 0 76px; width: 76px; height: 76px; padding: 0; border: 2px solid transparent; background: #e9ece7; cursor: pointer; overflow: hidden; }
+.detail-thumbnail.active { border-color: #397158; }
+.detail-thumbnail:focus-visible, .catalogue-pagination button:focus-visible { outline: 3px solid #76a68a; outline-offset: 3px; }
+.detail-thumbnail img, .detail-thumbnail .image-fallback { width: 100%; height: 100%; object-fit: cover; }
 .detail-copy h1 { margin-bottom: 8px; }
 .detail-model { color: #78877f; margin-bottom: 25px; }
+.detail-sku { color: #78877f; font-size: 12px; margin: -14px 0 18px; }
 .detail-description { color: #66746d; line-height: 1.7; max-width: 470px; }
+.detail-description { white-space: pre-line; }
 .detail-price { display: block; color: #12372a; font: 700 28px "Manrope"; margin: 28px 0 8px; }
 .availability { color: #397158; font-size: 13px; margin-bottom: 28px; }
+.availability.out-of-stock { color: #a64b45; }
+.detail-specifications { margin-top: 36px; border-top: 1px solid #e0e7df; padding-top: 24px; }
+.detail-specifications h2 { font-size: 22px; letter-spacing: -.04em; margin-bottom: 16px; }
+.detail-specifications dl { margin: 0; }
+.specification-row { display: grid; grid-template-columns: minmax(100px, .7fr) 1.3fr; gap: 18px; padding: 12px 0; border-bottom: 1px solid #e9eee8; font-size: 13px; }
+.specification-row dt { color: #78877f; }
+.specification-row dd { margin: 0; color: #284b3b; overflow-wrap: anywhere; }
+.specifications-empty { color: #78877f; font-size: 13px; }
 .form-section { background: #f8f7f2; }
 .form-layout { display: grid; grid-template-columns: .72fr 1.28fr; gap: 100px; align-items: start; }
 .form-aside h2 { font-size: 34px; }
@@ -408,6 +427,7 @@ h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.1; letter-spacing: -.06em
   .filters select { height: 42px; flex: 1; }
   .form-layout { gap: 30px; }
   .detail-image { height: 350px; }
+  .detail-thumbnail { flex-basis: 64px; width: 64px; height: 64px; }
   .enquiry-form { padding: 20px; }
   .footer-grid { grid-template-columns: 1fr; }
   .footer-grid > div:first-child { grid-column: auto; }

@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight, BadgeCheck, ChevronDown, ChevronRight, CircleCheck, CircleHelp, Clock3,
   Facebook, Instagram, Leaf, Linkedin, Menu, PackageCheck, Recycle, Search, ShieldCheck,
@@ -9,19 +9,32 @@ import {
 } from "lucide-react";
 import Cropper, { type Area, type Point } from "react-easy-crop";
 import { adminPricesToPaise, discountPercent, formatInr, paiseToInr } from "./price";
+import { ALL_DEVICES_CATEGORY, clearShopFilters, productsQuery, readShopFilters, readShopPage, SHOP_ROUTE, updateShopFilter, updateShopPage } from "./shop-state";
+import { ProductDetailContent } from "./product-details";
+import { CataloguePagination, CatalogueStatus } from "./catalogue-components";
 import "./styles.css";
 
 const queryClient = new QueryClient();
 const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
-if (import.meta.env.PROD && !configuredApiUrl) {
-  throw new Error("VITE_API_URL must be configured for production builds.");
+if (import.meta.env.PROD && configuredApiUrl !== "/api") {
+  throw new Error('VITE_API_URL must be exactly "/api" in production.');
 }
 const API_URL = (configuredApiUrl ?? "http://localhost:4000").replace(/\/+$/, "");
+
+function apiRequestUrl(path: string) {
+  const normalizedPath = `/${path.replace(/^\/+/, "")}`;
+  const baseHasApiPrefix = API_URL === "/api" || API_URL.endsWith("/api");
+  const requestPath = baseHasApiPrefix && (normalizedPath === "/api" || normalizedPath.startsWith("/api/"))
+    ? normalizedPath.slice(4) || "/"
+    : normalizedPath;
+  return `${API_URL}${requestPath}`;
+}
+
 type Product = {
   id: string; name: string; slug: string; sku?: string; brand: string; model: string;
   description: string; priceInPaise: number; originalPriceInPaise?: number | null;
   condition: "LIKE_NEW" | "EXCELLENT" | "GOOD" | "FAIR"; category: string;
-  stockQuantity: number; warrantyMonths?: number; imageUrls: string[]; isPublished?: boolean;
+  stockQuantity: number; warrantyMonths?: number; imageUrls: string[]; specifications?: unknown; availability?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK"; isPublished?: boolean;
 };
 
 type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number; totalPages: number }; message?: string };
@@ -36,7 +49,7 @@ class ApiError extends Error {
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEnvelope<T>> {
   const isFormData = options?.body instanceof FormData;
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(apiRequestUrl(path), {
     ...options,
     credentials: "include",
     headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options?.headers ?? {}) },
@@ -131,7 +144,7 @@ function Header() {
   const navigate = useNavigate();
   const me = useQuery<AuthUser>({ queryKey: ["auth-me"], queryFn: () => apiRequest<AuthUser>("/auth/me").then(result => result.data), retry: false });
   const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { queryClient.clear(); navigate("/", { replace: true }); } });
-  const links = [["Home", "/"], ["Shop devices", "/products"], ["About", "/about"], ["Services", "/services"], ["Contact", "/contact"]];
+  const links = [["Home", "/"], ["Shop devices", SHOP_ROUTE], ["About", "/about"], ["Services", "/services"], ["Contact", "/contact"]];
   return <header className="site-header"><div className="container nav-wrap"><Logo />
     <nav className={`main-nav ${open ? "is-open" : ""}`} aria-label="Primary navigation">
       {links.map(([label, path]) => <NavLink key={path} to={path} onClick={() => setOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>)}
@@ -145,7 +158,7 @@ function Header() {
 function Footer() {
   return <footer className="footer"><div className="container footer-grid">
     <div><Logo /><p className="footer-intro">Better technology, less waste. We make trusted electronics more accessible while keeping them in use for longer.</p><div className="socials"><a href="https://instagram.com" aria-label="Instagram"><Instagram size={17} /></a><a href="https://linkedin.com" aria-label="LinkedIn"><Linkedin size={17} /></a><a href="https://youtube.com" aria-label="YouTube"><Youtube size={17} /></a><a href="https://facebook.com" aria-label="Facebook"><Facebook size={17} /></a></div></div>
-    <div><h3>Explore</h3><Link to="/about">Our story</Link><Link to="/services">What we do</Link><Link to="/products">Shop devices</Link><Link to="/how-it-works">How it works</Link></div>
+    <div><h3>Explore</h3><Link to="/about">Our story</Link><Link to="/services">What we do</Link><Link to={SHOP_ROUTE}>Shop devices</Link><Link to="/how-it-works">How it works</Link></div>
     <div><h3>Work with us</h3><Link to="/trade-in">Trade in a device</Link><Link to="/partnership">Partner with MobieDoor</Link><Link to="/contact">Contact us</Link></div>
     <div><h3>Stay in the loop</h3><p className="footer-small">Thoughtful notes on technology, value and the circular economy.</p><Newsletter /></div>
   </div><div className="container footer-bottom"><span>© 2026 MobieDoor Technologies. Built for a better tomorrow.</span><span>Privacy &nbsp;·&nbsp; Terms</span></div></footer>;
@@ -164,7 +177,7 @@ function PageIntro({ eyebrow, title, text }: { eyebrow: string; title: string; t
 
 function Home() {
   return <>
-    <section className="hero"><div className="container hero-grid"><div className="hero-copy"><p className="eyebrow light">The smarter way to own tech</p>    <h1>Good technology should go further.</h1><p className="hero-text">Premium refurbished devices, thoughtfully restored and ready for their next chapter. Better for your pocket. Better for the planet.</p><div className="hero-actions"><Button to="/products">Explore devices</Button><Button to="/trade-in" variant="outline">Trade in your device</Button></div><div className="hero-proof"><span><CircleCheck size={16} /> 40+ point quality check</span><span><CircleCheck size={16} /> Warranty included</span></div></div><div className="hero-visual"><div className="hero-image">    <FallbackImage src="https://images.unsplash.com/photo-1632661674596-df8be070a5c5?auto=format&fit=crop&w=1200&q=85" alt="Refurbished smartphone on a clean desk" /></div><div className="floating-card"><span className="check-icon"><BadgeCheck size={20} /></span><div><strong>MobieDoor verified</strong><small>Quality you can feel</small></div></div><div className="hero-stamp"><span>Since</span><strong>2026</strong><span>India</span></div></div></div></section>
+    <section className="hero"><div className="container hero-grid"><div className="hero-copy"><p className="eyebrow light">The smarter way to own tech</p>    <h1>Good technology should go further.</h1><p className="hero-text">Premium refurbished devices, thoughtfully restored and ready for their next chapter. Better for your pocket. Better for the planet.</p><div className="hero-actions"><Button to={SHOP_ROUTE}>Explore devices</Button><Button to="/trade-in" variant="outline">Trade in your device</Button></div><div className="hero-proof"><span><CircleCheck size={16} /> 40+ point quality check</span><span><CircleCheck size={16} /> Warranty included</span></div></div><div className="hero-visual"><div className="hero-image">    <FallbackImage src="https://images.unsplash.com/photo-1632661674596-df8be070a5c5?auto=format&fit=crop&w=1200&q=85" alt="Refurbished smartphone on a clean desk" /></div><div className="floating-card"><span className="check-icon"><BadgeCheck size={20} /></span><div><strong>MobieDoor verified</strong><small>Quality you can feel</small></div></div><div className="hero-stamp"><span>Since</span><strong>2026</strong><span>India</span></div></div></div></section>
     <section className="trust-bar"><div className="container trust-items"><span><ShieldCheck size={19} /> Verified quality</span><span><Truck size={19} /> Delivered with care</span><span><Clock3 size={19} /> 6 month warranty</span><span><Leaf size={19} /> Circular by design</span></div></section>
     <ShopByCategory />
     <section className="section soft-section"><div className="container split-section"><RefurbishmentVisual className="section-image" /><div className="split-copy"><p className="eyebrow">Why MobieDoor</p><h2>Renewed, not compromised.</h2><p>We believe choosing refurbished should feel like an upgrade. Every device is assessed, restored and verified by our team before it reaches you.</p><ul className="feature-list"><li><span><PackageCheck size={20} /></span><div><strong>Honest condition grades</strong><small>No vague “like new” claims. Just clear, useful detail.</small></div></li><li><span><Wrench size={20} /></span><div><strong>Technician-led checks</strong><small>Performance, battery, camera and more, tested properly.</small></div></li><li><span><Leaf size={20} /></span><div><strong>A lighter footprint</strong><small>Extending a device's life keeps useful tech in circulation.</small></div></li></ul><Button to="/how-it-works" variant="text">See our process</Button></div></div></section>
@@ -188,27 +201,31 @@ const serviceSteps: Array<{ num: string; title: string; text: string; icon: Luci
 function Services() { return <><PageIntro eyebrow="What we do" title="The full journey of a better device." text="From first inspection to the moment it reaches a new owner, we combine thoughtful operations with genuine technical care." /><section className="section"><div className="container service-list">{serviceSteps.map(({ num, title, text, icon: Icon }) => <article className="service-row" key={num}><span className="service-number">{num}</span><div className="service-row-icon"><Icon size={25} /></div><div><h2>{title}</h2><p>{text}</p></div><ChevronRight className="row-arrow" /></article>)}</div></section><section className="cta-band"><div className="container cta-band-inner"><div><p className="eyebrow light">Ready to make a difference?</p><h2>Let’s keep good technology moving.</h2></div><Button to="/contact" variant="outline">Start a conversation</Button></div></section></>; }
 
 function Products() {
-  const location = useLocation();
-  const categoryFromUrl = new URLSearchParams(location.search).get("category");
-  const validUrlCategory = shopCategories.some(item => item.value === categoryFromUrl) ? categoryFromUrl : null;
-  const [search, setSearch] = useState(""); const [category, setCategory] = useState(validUrlCategory ?? "All devices"); const [sort, setSort] = useState("Featured");
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: categoryData } = useQuery<string[]>({ queryKey: ["categories"], queryFn: () => apiRequest<string[]>("/categories").then(result => result.data) });
-  const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]> & { data: Product[] }>({
-    queryKey: ["products", search, category, sort],
+  const { search, category, sort } = readShopFilters(searchParams, categoryData ?? []);
+  const page = readShopPage(searchParams);
+  const updateFilter = (key: "search" | "category" | "sort", value: string) => {
+    setSearchParams(updateShopFilter(searchParams, key, value), { replace: true });
+  };
+  const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]>>({
+    queryKey: ["products", search, category, sort, page],
     queryFn: () => {
-      const params = new URLSearchParams();
-      if (search) params.set("search", search);
-      if (category !== "All devices") params.set("category", category);
-      if (sort === "Price: low to high") params.set("sort", "price_asc");
-      if (sort === "Price: high to low") params.set("sort", "price_desc");
-      return apiRequest<Product[]>(`/products?${params.toString()}`);
+      const query = productsQuery({ search, category, sort }, page).toString();
+      return apiRequest<Product[]>(`/products${query ? `?${query}` : ""}`);
     },
     retry: false,
   });
+  useEffect(() => {
+    const totalPages = data?.meta?.totalPages;
+    if (totalPages === undefined) return;
+    if (totalPages === 0 && page !== 1) setSearchParams(updateShopPage(searchParams, 1), { replace: true });
+    else if (totalPages > 0 && page > totalPages) setSearchParams(updateShopPage(searchParams, totalPages), { replace: true });
+  }, [data?.meta?.totalPages, page, searchParams, setSearchParams]);
   const products = data?.data ?? [];
-  const hasFilters = Boolean(search || category !== "All devices");
-  const clearFilters = () => { setSearch(""); setCategory("All devices"); setSort("Featured"); };
-  return <><PageIntro eyebrow="The collection" title="Devices with more to give." text="Browse verified technology that has been carefully restored and honestly described. Better value, without the guesswork." /><section className="section catalogue"><div className="container"><div className="catalogue-toolbar"><label className="search-field"><Search size={18} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by brand or model" /><button type="button" className="clear-search" onClick={() => setSearch("")} disabled={!search} aria-label="Clear search">×</button></label><div className="filters"><select aria-label="Filter by category" value={category} onChange={e => setCategory(e.target.value)}><option>All devices</option>{(categoryData ?? []).map(item => <option key={item}>{item}</option>)}</select><select aria-label="Sort products" value={sort} onChange={e => setSort(e.target.value)}><option>Featured</option><option>Price: low to high</option><option>Price: high to low</option></select></div></div>{isLoading && <div className="catalogue-state"><Sparkles size={25} /><h2>Loading the collection</h2><p>Checking the latest verified devices.</p></div>}{isError && <div className="catalogue-state pending"><CircleHelp size={27} /><h2>The live collection is currently unavailable.</h2><p>We could not load the verified collection. Please try again or ask our team about availability.</p><Button to="/contact" variant="text">Ask about availability</Button></div>}{data && products.length === 0 && <div className="catalogue-state"><Search size={25} /><h2>{hasFilters ? "No devices match these filters." : "No published devices yet."}</h2><p>{hasFilters ? "Try a different brand, model or category." : "The live catalogue is being prepared. Check back soon or ask our team about availability."}</p>{hasFilters && <button type="button" className="button text" onClick={clearFilters}>Clear filters <X size={16} /></button>}</div>}{data && products.length > 0 && <div className="product-grid api-products">{products.map(product => <Link className="product-card" to={`/products/${product.slug}`} key={product.id}><div className="product-image"><FallbackImage src={product.imageUrls[0]} alt={product.name} /><span className="condition-tag">{product.condition.replace("_", " ")}</span></div><div className="product-info"><div><h3>{product.name}</h3><p>{product.brand} · {product.model}</p></div><strong>{formatInr(product.priceInPaise)}</strong>{product.originalPriceInPaise && product.originalPriceInPaise > product.priceInPaise && <small className="original-price">{formatInr(product.originalPriceInPaise)} · {discountPercent(product.priceInPaise, product.originalPriceInPaise)}% off</small>}</div></Link>)}</div>}</div></section></>;
+  const hasFilters = Boolean(search.trim() || category !== ALL_DEVICES_CATEGORY);
+  const clearFilters = () => setSearchParams(clearShopFilters(searchParams), { replace: true });
+  return <><PageIntro eyebrow="The collection" title="Devices with more to give." text="Browse verified technology that has been carefully restored and honestly described. Better value, without the guesswork." /><section className="section catalogue"><div className="container"><div className="catalogue-toolbar"><label className="search-field"><Search size={18} /><input value={search} onChange={e => updateFilter("search", e.target.value)} placeholder="Search by brand or model" /><button type="button" className="clear-search" onClick={() => updateFilter("search", "")} disabled={!search} aria-label="Clear search">×</button></label><div className="filters"><select aria-label="Filter by category" value={category} onChange={e => updateFilter("category", e.target.value)}><option>{ALL_DEVICES_CATEGORY}</option>{(categoryData ?? []).map(item => <option key={item}>{item}</option>)}</select><select aria-label="Sort products" value={sort} onChange={e => updateFilter("sort", e.target.value)}><option>Featured</option><option>Price: low to high</option><option>Price: high to low</option></select></div></div>{isLoading && <CatalogueStatus state="loading" />}{isError && <CatalogueStatus state="error" />}{data && products.length === 0 && <CatalogueStatus state="empty" hasFilters={hasFilters} onClear={clearFilters} />}{data && products.length > 0 && <><div className="product-grid api-products">{products.map(product => <Link className="product-card" to={`/products/${product.slug}`} key={product.id}><div className="product-image"><FallbackImage src={product.imageUrls[0]} alt={product.name} /><span className="condition-tag">{product.condition.replace("_", " ")}</span></div><div className="product-info"><div><h3>{product.name}</h3><p>{product.brand} · {product.model}</p></div><strong>{formatInr(product.priceInPaise)}</strong>{product.originalPriceInPaise && product.originalPriceInPaise > product.priceInPaise && <small className="original-price">{formatInr(product.originalPriceInPaise)} · {discountPercent(product.priceInPaise, product.originalPriceInPaise)}% off</small>}</div></Link>)}</div><CataloguePagination page={page} totalPages={data.meta?.totalPages ?? 1} onPrevious={() => setSearchParams(updateShopPage(searchParams, page - 1), { replace: true })} onNext={() => setSearchParams(updateShopPage(searchParams, page + 1), { replace: true })} /></>}</div></section></>;
 }
 
 function ProductDetails() {
@@ -216,7 +233,7 @@ function ProductDetails() {
   const { data, isLoading, isError } = useQuery<Product>({ queryKey: ["product", slug], queryFn: () => apiRequest<Product>(`/products/${encodeURIComponent(slug ?? "")}`).then(result => result.data), enabled: Boolean(slug), retry: false });
   if (isLoading) return <section className="section detail-page"><div className="container catalogue-state"><Sparkles size={28} /><h2>Loading device details</h2><p>Checking the latest verified information.</p></div></section>;
   if (isError || !data) return <section className="section detail-page"><div className="container catalogue-state pending"><PackageCheck size={28} /><p className="eyebrow">Product detail</p><h1>We could not find that device.</h1><p>It may no longer be available, or the live catalogue is temporarily unavailable.</p><Button to="/products">Back to collection</Button></div></section>;
-  return <section className="section detail-page"><div className="container detail-layout"><div className="detail-image"><FallbackImage src={data.imageUrls[0]} alt={data.name} /></div><div className="detail-copy"><p className="eyebrow">{data.condition.replace("_", " ")} condition</p><h1>{data.name}</h1><p className="detail-model">{data.brand} · {data.model}</p><p className="detail-description">{data.description}</p><strong className="detail-price">{formatInr(data.priceInPaise)}</strong>{data.originalPriceInPaise && data.originalPriceInPaise > data.priceInPaise && <p className="original-price">{formatInr(data.originalPriceInPaise)} · {discountPercent(data.priceInPaise, data.originalPriceInPaise)}% off</p>}<p className="availability">{data.stockQuantity > 0 ? `${data.stockQuantity} available` : "Currently unavailable"}{data.warrantyMonths ? ` · ${data.warrantyMonths}-month warranty` : ""}</p><Button to="/contact">Enquire about this device</Button></div></div></section>;
+  return <ProductDetailContent product={data} />;
 }
 
 function FormPage({ type }: { type: "trade" | "partner" | "contact" }) {
@@ -359,13 +376,13 @@ function AdminProductForm({ productId }: { productId?: string }) {
     const values = Object.fromEntries(new FormData(event.currentTarget).entries());
     const { priceInr, originalPriceInr, ...productValues } = values;
     const prices = adminPricesToPaise(String(priceInr), originalPriceInr ? String(originalPriceInr) : productId ? null : undefined);
-    const payload = { ...productValues, ...prices, stockQuantity: Number(values.stockQuantity), warrantyMonths: values.warrantyMonths ? Number(values.warrantyMonths) : undefined, imageUrls, specifications: {} };
+    const payload = { ...productValues, ...prices, ...(!productId ? { stockQuantity: Number(values.stockQuantity) } : {}), warrantyMonths: values.warrantyMonths ? Number(values.warrantyMonths) : undefined, imageUrls, specifications: {} };
     mutation.mutate(payload);
   };
   if (me.isLoading) return <div className="admin-loading">Checking secure session...</div>;
   if (me.isError) return <Navigate to="/admin/login" replace />;
   if (me.data?.role !== "ADMIN" && me.data?.role !== "FOUNDER") return <Navigate to="/admin" replace />;
-  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><NavLink to="/admin">← Back to dashboard</NavLink></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">Catalogue</p><h1>{productId ? "Edit product." : "Add a product."}</h1></div></div>{productId && existingList.isLoading ? <p className="admin-muted">Loading product...</p> : <form className="admin-product-form" onSubmit={submit}><div className="form-row"><label>Product name<input name="name" required defaultValue={existing?.name} /></label><label>SKU<input name="sku" required defaultValue={existing?.sku} /></label></div><div className="form-row"><label>Brand<input name="brand" required defaultValue={existing?.brand} /></label><label>Model<input name="model" required defaultValue={existing?.model} /></label></div><div className="form-row"><label>Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={existing?.slug} /></label><label>Category<input name="category" required placeholder="Phones" defaultValue={existing?.category} /></label></div><div className="form-row"><label>Price (INR)<input name="priceInr" required type="number" min="0" step="0.01" defaultValue={existing ? paiseToInr(existing.priceInPaise) : undefined} /></label><label>Original price (INR)<input name="originalPriceInr" type="number" min="0" step="0.01" defaultValue={existing?.originalPriceInPaise ? paiseToInr(existing.originalPriceInPaise) : undefined} /></label></div><div className="form-row"><label>Stock quantity<input name="stockQuantity" required type="number" min="0" defaultValue={existing?.stockQuantity} /></label><label>Condition<select name="condition" defaultValue={existing?.condition ?? "EXCELLENT"}><option>LIKE_NEW</option><option>EXCELLENT</option><option>GOOD</option><option>FAIR</option></select></label></div><ImageUpload initialUrl={existing?.imageUrls[0]} onUploaded={url => { setUploadedImage(url); setImageRemoved(false); setImageError(""); }} onRemoved={() => { setUploadedImage(undefined); setImageRemoved(true); }} /><label>Description<textarea name="description" required minLength={10} rows={5} defaultValue={existing?.description} /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : productId ? "Save changes" : "Create product"}<ArrowRight size={16} /></button>{imageError && <p className="form-status form-error" role="alert">{imageError}</p>}{mutation.isError && <p className="form-status form-error" role="alert">{(mutation.error as Error).message}</p>}</form>}</main></div>;
+  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><NavLink to="/admin">← Back to dashboard</NavLink></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">Catalogue</p><h1>{productId ? "Edit product." : "Add a product."}</h1></div></div>{productId && existingList.isLoading ? <p className="admin-muted">Loading product...</p> : <form className="admin-product-form" onSubmit={submit}><div className="form-row"><label>Product name<input name="name" required defaultValue={existing?.name} /></label><label>SKU<input name="sku" required defaultValue={existing?.sku} /></label></div><div className="form-row"><label>Brand<input name="brand" required defaultValue={existing?.brand} /></label><label>Model<input name="model" required defaultValue={existing?.model} /></label></div><div className="form-row"><label>Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={existing?.slug} /></label><label>Category<input name="category" required placeholder="Phones" defaultValue={existing?.category} /></label></div><div className="form-row"><label>Price (INR)<input name="priceInr" required type="number" min="0" step="0.01" defaultValue={existing ? paiseToInr(existing.priceInPaise) : undefined} /></label><label>Original price (INR)<input name="originalPriceInr" type="number" min="0" step="0.01" defaultValue={existing?.originalPriceInPaise ? paiseToInr(existing.originalPriceInPaise) : undefined} /></label></div><div className="form-row">{productId ? <label>Current stock<input value={`${existing?.stockQuantity ?? "—"} units`} readOnly /><small>To change stock, use the Inventory section in <Link to="/admin#operations">Admin Operations</Link>.</small></label> : <label>Initial stock quantity<input name="stockQuantity" required type="number" min="0" defaultValue={0} /></label>}<label>Condition<select name="condition" defaultValue={existing?.condition ?? "EXCELLENT"}><option>LIKE_NEW</option><option>EXCELLENT</option><option>GOOD</option><option>FAIR</option></select></label></div><ImageUpload initialUrl={existing?.imageUrls[0]} onUploaded={url => { setUploadedImage(url); setImageRemoved(false); setImageError(""); }} onRemoved={() => { setUploadedImage(undefined); setImageRemoved(true); }} /><label>Description<textarea name="description" required minLength={10} rows={5} defaultValue={existing?.description} /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : productId ? "Save changes" : "Create product"}<ArrowRight size={16} /></button>{imageError && <p className="form-status form-error" role="alert">{imageError}</p>}{mutation.isError && <p className="form-status form-error" role="alert">{(mutation.error as Error).message}</p>}</form>}</main></div>;
 }
 
 function ImageUpload({ initialUrl, onUploaded, onRemoved }: { initialUrl?: string; onUploaded: (url: string) => void; onRemoved: () => void }) {
