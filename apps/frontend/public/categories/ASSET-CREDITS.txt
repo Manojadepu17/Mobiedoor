@@ -1,0 +1,13 @@
+Category and promotional photographs are local copies downloaded from Unsplash.
+They are used under the Unsplash License: https://unsplash.com/license
+
+mobiles-photo.jpg       https://images.unsplash.com/photo-1598327105666-5b89351aff97
+laptops-photo.jpg       https://images.unsplash.com/photo-1496181133206-80ce9b88a853
+tablets-photo.jpg       https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0
+smartwatches-photo.jpg  https://images.unsplash.com/photo-1579586337278-3befd40fd17
+accessories-photo.jpg   https://images.unsplash.com/photo-1505740420928-5e560c06d30e
+hero-phone.jpg          https://images.unsplash.com/photo-1601784551446-20c9e07cdbdb
+trade-in-phone.jpg      https://images.unsplash.com/photo-1605236453806-6ff36851218e
+hero-smartphone.jpg     https://images.unsplash.com/photo-1592899677977-9c10ca588bbd
+deals-phone.jpg         https://images.unsplash.com/photo-1511707171634-5f897ff02aa9
+banner-phone.jpg        https://images.unsplash.com/photo-1603791440384-56cd371ee9a7

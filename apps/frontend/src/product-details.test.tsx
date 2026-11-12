@@ -36,6 +36,7 @@ describe("product details presentation", () => {
     expect(markup).toContain("₹65,000");
     expect(markup).toContain("₹81,250");
     expect(markup).toContain("20% off");
+    expect(markup).toContain("MobieDoor Verified");
     expect(markup).toContain("In Stock · 3 available");
     expect(markup).toContain("EXCELLENT condition");
   });

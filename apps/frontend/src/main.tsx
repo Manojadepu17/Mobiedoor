@@ -1,17 +1,25 @@
-import { StrictMode, useCallback, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  ArrowRight, BadgeCheck, ChevronDown, ChevronRight, CircleCheck, CircleHelp, Clock3,
-  Facebook, Instagram, Leaf, Linkedin, Menu, PackageCheck, Recycle, Search, ShieldCheck,
-  Sparkles, Truck, X, Wrench, Youtube, LogOut, LayoutDashboard, Plus, Trash2, Users, type LucideIcon,
+  ArrowRight, ArrowUp, BadgeCheck, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, CircleHelp,
+  Clock3, Facebook, Gamepad2, Headphones, Instagram, Laptop, Leaf, Linkedin, Menu, PackageCheck, Recycle,
+  Search, ShieldCheck, Smartphone, Sparkles, SlidersHorizontal, Tablet, Truck, Watch, Wrench,
+  X, Youtube, LogOut, LayoutDashboard, Plus, Trash2, Users, type LucideIcon,
 } from "lucide-react";
 import Cropper, { type Area, type Point } from "react-easy-crop";
-import { adminPricesToPaise, discountPercent, formatInr, paiseToInr } from "./price";
-import { ALL_DEVICES_CATEGORY, clearShopFilters, productsQuery, readShopFilters, readShopPage, SHOP_ROUTE, updateShopFilter, updateShopPage } from "./shop-state";
+import { adminPricesToPaise, discountPercent, formatInr, inrToPaise, paiseToInr } from "./price";
+import {
+  ALL_DEVICES_CATEGORY, buildShopBudgetRanges, clearShopFilters, displayShopCategory,
+  filterShopProducts, productsQuery, readShopFilters, readShopPage, readShopRefinements,
+  resolveShopCategory, SHOP_ROUTE, updateShopFilter, updateShopPage, updateShopRefinement,
+  type ShopFilters,
+} from "./shop-state";
 import { ProductDetailContent } from "./product-details";
-import { CataloguePagination, CatalogueStatus } from "./catalogue-components";
+import { CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
+import { VerifiedBadge } from "./verified-badge";
+import { CATEGORY_IMAGES, HERO_IMAGES } from "./config/homepageImages";
 import "./styles.css";
 
 const queryClient = new QueryClient();
@@ -60,6 +68,24 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEn
   return body;
 }
 
+async function fetchAllCatalogueProducts(filters: ShopFilters) {
+  const query = productsQuery(filters);
+  query.set("limit", "50");
+  const firstPage = await apiRequest<Product[]>(`/products?${query}`);
+  const totalPages = firstPage.meta?.totalPages ?? 1;
+  const additionalPages = await Promise.all(
+    Array.from({ length: Math.max(0, totalPages - 1) }, async (_, index) => {
+      const pageQuery = new URLSearchParams(query);
+      pageQuery.set("page", String(index + 2));
+      return apiRequest<Product[]>(`/products?${pageQuery}`);
+    }),
+  );
+  return {
+    ...firstPage,
+    data: [ ...firstPage.data, ...additionalPages.flatMap(page => page.data) ],
+  };
+}
+
 function createCroppedImage(source: string, crop: Area | undefined, rotation: number) {
   return new Promise<Blob>((resolve, reject) => {
     const image = new Image();
@@ -88,51 +114,72 @@ function createCroppedImage(source: string, crop: Area | undefined, rotation: nu
   });
 }
 
-const shopCategories = [
-  { value: "mobiles", label: "Mobiles", image: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=1000&q=85" },
-  { value: "laptops", label: "Laptops", image: "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=1000&q=85" },
-  { value: "tablets", label: "Tablets", image: "https://images.unsplash.com/photo-1544244015-0df4b3ffc6b0?auto=format&fit=crop&w=1000&q=85" },
-] as const;
-
-const services = [
-  { icon: Recycle, eyebrow: "Give devices a second life", title: "Device collection", text: "Turn unused technology into value with a simple, transparent collection experience." },
-  { icon: Wrench, eyebrow: "Carefully restored", title: "Refurbishment", text: "Our technicians restore each device with the precision it deserves, never cutting corners." },
-  { icon: ShieldCheck, eyebrow: "Confidence included", title: "Quality verification", text: "Every device passes a multi-point diagnostic before it earns the MobieDoor mark." },
+const shopCategories: Array<{ value: string; label: string; icon: LucideIcon }> = [
+  { value: "mobiles", label: "Mobiles", icon: Smartphone },
+  { value: "laptops", label: "laptops", icon: Laptop },
+  { value: "tablets", label: "Tablets", icon: Tablet },
+  { value: "smartwatches", label: "Smartwatches", icon: Watch },
+  { value: "accessories", label: "Accessories", icon: Headphones },
+  { value: "gaming", label: "Gaming Devices", icon: Gamepad2 },
 ];
 
-const lifecycleStages = [
-  { label: "Collect", text: "Gather pre-owned devices from individuals, businesses, and institutions.", icon: Recycle },
-  { label: "Diagnostics", text: "Carefully inspect devices and assess their condition.", icon: Search },
-  { label: "Refurbishment", text: "Repair devices, replace components, and restore functionality.", icon: Wrench },
-  { label: "Quality check", text: "Test device functionality, reliability, and performance before resale.", icon: ShieldCheck },
-  { label: "Resell & reuse", text: "Return refurbished devices to customers and extend their useful life.", icon: Leaf },
-];
+const homepageCategories = shopCategories.slice(0, 5);
 
 function Logo() {
-  return <Link to="/" className="brand" aria-label="MobieDoor home"><span className="brand-mark">MD</span><span>mobie<span>door</span></span></Link>;
+  return <Link to="/" className="brand" aria-label="MobieDoor home"><img className="brand-image" src="/brand/mobiedoor-logo.png" alt="MobieDoor" width="1222" height="687" decoding="async" /></Link>;
 }
 
-function FallbackImage({ src, alt, className = "" }: { src?: string; alt: string; className?: string }) {
+function FallbackImage({ src, alt, className = "", loading = "lazy", style, fetchPriority }: {
+  src?: string;
+  alt: string;
+  className?: string;
+  loading?: "eager" | "lazy";
+  style?: React.CSSProperties;
+  fetchPriority?: "high" | "low" | "auto";
+}) {
   const [failed, setFailed] = useState(!src);
   return failed
-    ? <div className={`image-fallback ${className}`} role="img" aria-label={alt}><PackageCheck size={28} /><span>MobieDoor verified device</span></div>
-    : <img className={className} src={src} alt={alt} onError={() => setFailed(true)} />;
+    ? <div className={`image-fallback ${className}`} style={style} role="img" aria-label={alt}><PackageCheck size={28} /><span>Product image unavailable</span></div>
+    : <img className={className} src={src} alt={alt} loading={loading} {...{ fetchpriority: fetchPriority }} decoding="async" style={style} onError={() => setFailed(true)} />;
 }
 
 function RefurbishmentVisual({ className = "" }: { className?: string }) {
   return <div className={`refurbishment-visual ${className}`} role="img" aria-label="MobieDoor technician inspecting a refurbished device"><div className="visual-device"><div className="visual-screen"><PackageCheck size={34} /><span>Verified</span></div><div className="visual-port" /></div><div className="visual-tools"><Wrench size={24} /><ShieldCheck size={24} /><span>Tested with care</span></div><span className="visual-caption">MobieDoor refurbishment workspace</span></div>;
 }
 
-function LifecycleSection() {
-  return <section className="lifecycle-section" aria-labelledby="lifecycle-title"><div className="container lifecycle-layout"><div className="lifecycle-intro"><p className="eyebrow light">The MobieDoor loop</p><h2 id="lifecycle-title">One device.<br /><em>More useful life.</em></h2><p className="dark-lead">We keep good technology moving through a considered cycle of care, so every handover creates value without creating more waste.</p><div className="lifecycle-proof"><CircleCheck size={17} /><span>Designed to keep devices in circulation</span></div></div><div className="lifecycle-diagram" aria-label="Five-stage device lifecycle"><svg className="lifecycle-orbit" viewBox="0 0 600 600" aria-hidden="true"><defs><marker id="lifecycle-arrow" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" /></marker></defs><circle className="orbit-glow" cx="300" cy="300" r="205" /><path className="orbit-path" d="M300 95 A205 205 0 1 1 299.9 95" markerEnd="url(#lifecycle-arrow)" /></svg><div className="lifecycle-center"><div className="lifecycle-device"><PackageCheck size={35} /><span>MobieDoor</span><small>verified</small></div><span className="lifecycle-center-caption">Care in<br />circulation</span></div><ol className="lifecycle-stages">{lifecycleStages.map(({ label, text, icon: Icon }, index) => <li className={`lifecycle-stage lifecycle-stage-${index + 1}`} key={label}><div className="lifecycle-stage-icon"><Icon size={18} /></div><div><span className="lifecycle-stage-number">0{index + 1}</span><h3>{label}</h3><p>{text}</p></div></li>)}</ol></div></div></section>;
+function categoryHref(value: string, categories: string[]) {
+  const resolved = resolveShopCategory(value, categories);
+  return `${SHOP_ROUTE}?category=${encodeURIComponent(resolved)}`;
 }
 
-function CategoryCard({ category }: { category: typeof shopCategories[number] }) {
-  return <Link className="category-card" to={`/devices?category=${category.value}`} aria-label={`Shop ${category.label}`}><div className="category-card-image"><FallbackImage src={category.image} alt="" /></div><h3>{category.label}</h3></Link>;
+function CategoryCard({ category, categories }: { category: typeof shopCategories[number]; categories: string[] }) {
+  const artwork = CATEGORY_IMAGES[category.value];
+  return <Link className="category-card category-nav-card" to={categoryHref(category.value, categories)} aria-label={`Shop ${category.label}`}>
+    <span className="category-artwork"><FallbackImage
+      className="category-photo"
+      src={artwork.src}
+      alt={artwork.alt}
+      loading="lazy"
+      style={{ objectPosition: artwork.objectPosition }}
+    /></span>
+    <h3>{category.label}</h3>
+    <ArrowRight className="category-nav-arrow" size={16} aria-hidden="true" />
+  </Link>;
 }
 
 function ShopByCategory() {
-  return <section className="section shop-category-section"><div className="container"><SectionHeading eyebrow="The MobieDoor edit" title="Technology worth bringing home." text="Explore our collection by category." /><div className="category-grid">{shopCategories.map(category => <CategoryCard category={category} key={category.value} />)}</div></div></section>;
+  const { data: categories = [] } = useQuery<string[]>({
+    queryKey: ["categories"],
+    queryFn: () => apiRequest<string[]>("/categories").then(result => result.data),
+  });
+  return <section className="section shop-category-section category-nav-section">
+    <div className="container">
+      <SectionHeading eyebrow="Find your next device" title="Shop by category" />
+      <div className="category-grid category-nav-grid">
+        {homepageCategories.map(category => <CategoryCard category={category} categories={categories} key={category.value} />)}
+      </div>
+    </div>
+  </section>;
 }
 
 function Newsletter() {
@@ -142,53 +189,498 @@ function Newsletter() {
 function Header() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const [search, setSearch] = useState("");
+  const { data: categories = [] } = useQuery<string[]>({
+    queryKey: ["categories"],
+    queryFn: () => apiRequest<string[]>("/categories").then(result => result.data),
+  });
   const me = useQuery<AuthUser>({ queryKey: ["auth-me"], queryFn: () => apiRequest<AuthUser>("/auth/me").then(result => result.data), retry: false });
   const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { queryClient.clear(); navigate("/", { replace: true }); } });
-  const links = [["Home", "/"], ["Shop devices", SHOP_ROUTE], ["About", "/about"], ["Services", "/services"], ["Contact", "/contact"]];
+  const links = [["Home", "/"]];
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
+  const submitSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const query = search.trim();
+    navigate(`${SHOP_ROUTE}${query ? `?search=${encodeURIComponent(query)}` : ""}`);
+    setOpen(false);
+  };
   return <header className="site-header"><div className="container nav-wrap"><Logo />
-    <nav className={`main-nav ${open ? "is-open" : ""}`} aria-label="Primary navigation">
+    <nav id="primary-navigation" className={`main-nav ${open ? "is-open" : ""}`} aria-label="Primary navigation">
       {links.map(([label, path]) => <NavLink key={path} to={path} onClick={() => setOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>)}
+      <div className="nav-shop">
+        <NavLink to={SHOP_ROUTE} onClick={() => setOpen(false)} className={({ isActive }) => isActive ? "active nav-shop-link" : "nav-shop-link"}>Shop devices <ChevronDown size={15} aria-hidden="true" /></NavLink>
+        <div className="mega-menu" aria-label="Shop device categories">
+          {shopCategories.map(category => {
+            const Icon = category.icon;
+            return <Link key={category.value} to={categoryHref(category.value, categories)} onClick={() => setOpen(false)}><Icon size={18} /><span>{category.label}</span><ArrowRight size={14} /></Link>;
+          })}
+        </div>
+      </div>
+      <div className="mobile-category-links" aria-label="Shop by device category">
+        <span className="mobile-category-heading">Shop by category</span>
+        {shopCategories.map(({ value, label }) => <Link key={value} to={categoryHref(value, categories)} onClick={() => setOpen(false)}>{label}<ArrowRight size={14} aria-hidden="true" /></Link>)}
+      </div>
+      <form className="nav-search" role="search" onSubmit={submitSearch}><Search size={16} aria-hidden="true" /><input value={search} onChange={event => setSearch(event.target.value)} aria-label="Search devices" placeholder="Search devices" /><button type="submit" aria-label="Submit device search"><ArrowRight size={15} /></button></form>
       <Link className="nav-cta" to="/trade-in" onClick={() => setOpen(false)}>Trade in <ArrowRight size={15} /></Link>
       {me.data ? <><Link className="nav-account" to={me.data.role === "CUSTOMER" ? "/account" : me.data.role === "STAFF" ? "/staff" : "/admin"} onClick={() => setOpen(false)}>{me.data.name} <LayoutDashboard size={15} /></Link><button className="nav-logout" type="button" onClick={() => logout.mutate()} disabled={logout.isPending}>{logout.isPending ? "Signing out..." : "Logout"}</button></> : <><Link className="nav-auth" to="/login" onClick={() => setOpen(false)}>Sign In</Link><Link className="nav-cta" to="/register" onClick={() => setOpen(false)}>Register <ArrowRight size={15} /></Link></>}
     </nav>
-    <button className="menu-toggle" onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"}>{open ? <X /> : <Menu />}</button>
+    <button className="menu-toggle" type="button" aria-controls="primary-navigation" aria-expanded={open} onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"}>{open ? <X /> : <Menu />}</button>
   </div></header>;
 }
 
 function Footer() {
   return <footer className="footer"><div className="container footer-grid">
-    <div><Logo /><p className="footer-intro">Better technology, less waste. We make trusted electronics more accessible while keeping them in use for longer.</p><div className="socials"><a href="https://instagram.com" aria-label="Instagram"><Instagram size={17} /></a><a href="https://linkedin.com" aria-label="LinkedIn"><Linkedin size={17} /></a><a href="https://youtube.com" aria-label="YouTube"><Youtube size={17} /></a><a href="https://facebook.com" aria-label="Facebook"><Facebook size={17} /></a></div></div>
+    <div><Logo /><p className="footer-intro">Refurbished devices, clear listing details, and a second life for good technology.</p><div className="socials"><a href="https://instagram.com" aria-label="Instagram"><Instagram size={17} /></a><a href="https://linkedin.com" aria-label="LinkedIn"><Linkedin size={17} /></a><a href="https://youtube.com" aria-label="YouTube"><Youtube size={17} /></a><a href="https://facebook.com" aria-label="Facebook"><Facebook size={17} /></a></div></div>
     <div><h3>Explore</h3><Link to="/about">Our story</Link><Link to="/services">What we do</Link><Link to={SHOP_ROUTE}>Shop devices</Link><Link to="/how-it-works">How it works</Link></div>
-    <div><h3>Work with us</h3><Link to="/trade-in">Trade in a device</Link><Link to="/partnership">Partner with MobieDoor</Link><Link to="/contact">Contact us</Link></div>
+    <div><h3>Support</h3><Link to="/contact">Contact us</Link><Link to="/trade-in">Trade in a device</Link><Link to="/partnership">Partner with MobieDoor</Link></div>
     <div><h3>Stay in the loop</h3><p className="footer-small">Thoughtful notes on technology, value and the circular economy.</p><Newsletter /></div>
   </div><div className="container footer-bottom"><span>© 2026 MobieDoor Technologies. Built for a better tomorrow.</span><span>Privacy &nbsp;·&nbsp; Terms</span></div></footer>;
 }
 
-function Layout({ children }: { children: React.ReactNode }) { return <><Header /><main>{children}</main><Footer /></>; }
-function SectionHeading({ eyebrow, title, text, action }: { eyebrow: string; title: string; text?: string; action?: React.ReactNode }) {
-  return <div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2>{text && <p className="section-lead">{text}</p>}</div>{action}</div>;
+function BackToTop() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const updateVisibility = () => setVisible(window.scrollY > 600);
+    updateVisibility();
+    window.addEventListener("scroll", updateVisibility, { passive: true });
+    return () => window.removeEventListener("scroll", updateVisibility);
+  }, []);
+  return visible ? <button className="back-to-top" type="button" aria-label="Back to top" onClick={() => window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}><ArrowUp size={19} /></button> : null;
+}
+
+function Layout({ children }: { children: React.ReactNode }) { return <><Header /><main>{children}</main><Footer /><BackToTop /></>; }
+function SectionHeading({ eyebrow, title, text, action, id }: { eyebrow: string; title: string; text?: string; action?: React.ReactNode; id?: string }) {
+  return <div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2 id={id}>{title}</h2>{text && <p className="section-lead">{text}</p>}</div>{action}</div>;
 }
 function Button({ to, children, variant = "primary" }: { to: string; children: React.ReactNode; variant?: "primary" | "outline" | "text" }) {
   return <Link className={`button ${variant}`} to={to}>{children}<ArrowRight size={16} /></Link>;
+}
+
+function ProductCard({ product }: { product: Product }) {
+  const inStock = product.stockQuantity > 0;
+  const originalPrice = product.originalPriceInPaise ?? 0;
+  const savings = originalPrice > product.priceInPaise ? originalPrice - product.priceInPaise : 0;
+  return <Link className="product-card" to={`/products/${product.slug}`}>
+    <div className="product-image">
+      <FallbackImage src={product.imageUrls[0]} alt={product.name} />
+      <span className="condition-tag">{product.condition.replaceAll("_", " ")}</span>
+    </div>
+    <div className="product-info">
+      <div className="product-info-copy"><VerifiedBadge /><h3>{product.name}</h3><p>{product.brand} · {product.model}</p></div>
+      <div className="product-pricing">
+        <strong>{formatInr(product.priceInPaise)}</strong>
+        {savings > 0 && <><small className="original-price">{formatInr(originalPrice)}</small><small className="product-savings">Save {formatInr(savings)}</small></>}
+        <span className={`product-stock${inStock ? "" : " out-of-stock"}`}>{inStock ? `${product.stockQuantity} in stock` : "Out of stock"}</span>
+      </div>
+      <span className="product-detail-cta">View details <ArrowRight size={15} aria-hidden="true" /></span>
+    </div>
+  </Link>;
+}
+
+function ProductRail({ title, eyebrow, products, id, viewAllTo = SHOP_ROUTE }: { title: string; eyebrow: string; products: Product[]; id: string; viewAllTo?: string }) {
+  const railRef = useRef<HTMLDivElement>(null);
+  const [canScrollBack, setCanScrollBack] = useState(false);
+  const [canScrollForward, setCanScrollForward] = useState(false);
+  const updateScrollState = useCallback(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    setCanScrollBack(rail.scrollLeft > 0);
+    setCanScrollForward(rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 1);
+  }, []);
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    updateScrollState();
+    rail.addEventListener("scroll", updateScrollState, { passive: true });
+    window.addEventListener("resize", updateScrollState);
+    return () => {
+      rail.removeEventListener("scroll", updateScrollState);
+      window.removeEventListener("resize", updateScrollState);
+    };
+  }, [products.length, updateScrollState]);
+  const scrollRail = (direction: -1 | 1) => {
+    const rail = railRef.current;
+    if (!rail) return;
+    rail.scrollBy({
+      left: rail.clientWidth * 0.85 * direction,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  };
+  if (products.length === 0) return null;
+  return <section id={id} className="section home-shelf featured-section" aria-labelledby={`${id}-title`}>
+    <div className="container">
+      <SectionHeading id={`${id}-title`} eyebrow={eyebrow} title={title} action={<div className="product-rail-actions">
+        <div className="product-rail-controls" role="group" aria-label={`${title} carousel controls`}>
+          <button type="button" aria-label={`Previous ${title} products`} aria-controls={`${id}-products`} disabled={!canScrollBack} onClick={() => scrollRail(-1)}><ChevronLeft size={18} /></button>
+          <button type="button" aria-label={`Next ${title} products`} aria-controls={`${id}-products`} disabled={!canScrollForward} onClick={() => scrollRail(1)}><ChevronRight size={18} /></button>
+        </div>
+        <Button to={viewAllTo} variant="text">View all</Button>
+      </div>} />
+      <div ref={railRef} id={`${id}-products`} className="product-grid featured-grid" role="region" aria-label={`${title} products`} tabIndex={0}>
+        {products.map(product => <ProductCard key={product.id} product={product} />)}
+      </div>
+    </div>
+  </section>;
+}
+
+function ProductShelfLoading({ title, id }: { title: string; id: string }) {
+  return <section id={id} className="section home-shelf featured-section">
+    <div className="container">
+      <SectionHeading eyebrow="Live catalogue" title={title} />
+      <CatalogueSkeletonGrid count={4} />
+    </div>
+  </section>;
+}
+
+function DealsOfTheDay({ products, isLoading = false, isError = false }: { products: Product[]; isLoading?: boolean; isError?: boolean }) {
+  const hasDeals = products.length > 0;
+  const description = hasDeals
+    ? "Explore current listings with original prices on record. Prices and savings below come from the live catalogue."
+    : isError
+      ? "Deals could not be loaded right now. Browse the catalogue to check current listings."
+    : isLoading
+      ? "Checking current listings for savings with an original price on record."
+      : "No discounted listings are available right now. Browse live devices; savings appear only when an original price is provided.";
+  return <>
+    <section id="deals" className="section deals-banner-section" aria-labelledby="deals-title">
+      <div className={`container deals-banner${hasDeals ? " has-deals" : ""}`}>
+        <div className="deals-banner-copy">
+          <p className="eyebrow">{hasDeals ? "Real catalogue offers" : isError ? "Catalogue unavailable" : "Live catalogue"}</p>
+          <h2 id="deals-title">Deals of the day</h2>
+          <p>{description}</p>
+          <Button to={hasDeals ? "#deal-products" : SHOP_ROUTE}>{hasDeals ? "Shop deals" : "Browse all devices"}</Button>
+        </div>
+        <div className="deals-banner-art" aria-hidden="true">
+          {hasDeals
+            ? products.slice(0, 2).map((product, index) => <div className={`deal-product-art deal-product-art--${index + 1}`} key={product.id}>
+              <FallbackImage src={product.imageUrls[0]} alt="" loading="eager" />
+            </div>)
+            : <img src="/categories/deals-phone.jpg" alt="" loading="lazy" decoding="async" />}
+        </div>
+      </div>
+    </section>
+    {hasDeals && <ProductRail id="deal-products" eyebrow="Real listed savings" title="Available deals" products={products} />}
+  </>;
+}
+
+function ShopByBudget({ products }: { products: Product[] }) {
+  const ranges = buildShopBudgetRanges(products.map(product => product.priceInPaise));
+  if (ranges.length === 0) return null;
+  return <section className="section home-shelf budget-section" aria-labelledby="budget-title">
+    <div className="container">
+      <SectionHeading id="budget-title" eyebrow="A price that feels right" title="Shop by budget" />
+      <div className={`budget-grid${ranges.length === 1 ? " budget-grid--single" : ""}`}>
+        {ranges.map(({ minPrice, maxPrice }, index) => {
+          const query = new URLSearchParams();
+          if (minPrice !== null) query.set("minPrice", String(minPrice / 100));
+          if (maxPrice !== null) query.set("maxPrice", String(maxPrice / 100));
+          const matchingCount = products.filter(product =>
+            (minPrice === null || product.priceInPaise >= minPrice)
+            && (maxPrice === null || product.priceInPaise <= maxPrice)
+          ).length;
+          const label = minPrice === null && maxPrice !== null
+            ? `Up to ${formatInr(maxPrice)}`
+            : minPrice !== null && maxPrice === null
+              ? `From ${formatInr(minPrice)}`
+              : minPrice !== null && maxPrice !== null && minPrice === maxPrice
+                ? `At ${formatInr(minPrice)}`
+                : minPrice !== null && maxPrice !== null
+                  ? `${formatInr(minPrice)} – ${formatInr(maxPrice)}`
+                  : "Browse devices";
+          return <Link className="budget-card" to={`${SHOP_ROUTE}?${query}`} key={`${minPrice}-${maxPrice}`}>
+            <span>0{index + 1}</span><div><strong>{label}</strong><small>{matchingCount} {matchingCount === 1 ? "device" : "devices"} listed</small></div><ArrowRight size={18} aria-hidden="true" />
+          </Link>;
+        })}
+      </div>
+    </div>
+  </section>;
+}
+
+function BrandDiscovery({ products }: { products: Product[] }) {
+  const brands = [...products.reduce((counts, product) => {
+    const key = product.brand.trim().toLocaleLowerCase();
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.products.push(product);
+    } else {
+      counts.set(key, { name: product.brand.trim(), count: 1, products: [product] });
+    }
+    return counts;
+  }, new Map<string, { name: string; count: number; products: Product[] }>()).values()]
+    .sort((left, right) => left.name.localeCompare(right.name));
+  if (brands.length === 0) return null;
+  return <section className="section home-shelf brand-discovery" aria-labelledby="brand-discovery-title">
+    <div className="container">
+      <SectionHeading id="brand-discovery-title" eyebrow="Brands in the live catalogue" title="Shop by brand" />
+      <div className={`brand-discovery-grid${brands.length === 1 ? " brand-discovery-grid--single" : ""}`}>
+        {brands.map(({ name, count, products: brandProducts }) => {
+          const sampleProducts = brands.length === 1 ? brandProducts.filter(product => product.imageUrls[0]).slice(0, 2) : [];
+          return <Link className={`brand-discovery-card${brands.length === 1 ? " is-featured" : ""}`} to={`${SHOP_ROUTE}?brand=${encodeURIComponent(name)}`} key={name}>
+            <strong className="brand-discovery-wordmark">{name}</strong>
+            <small>{count} {count === 1 ? "device" : "devices"} in the catalogue</small>
+            <span className="brand-discovery-cta">Explore {name}</span>
+            {sampleProducts.length > 0 && <span className="brand-discovery-samples" aria-hidden="true">
+              {sampleProducts.map(product => <img src={product.imageUrls[0]} alt="" loading="lazy" decoding="async" key={product.id} />)}
+            </span>}
+            <ArrowRight size={17} aria-hidden="true" />
+          </Link>;
+        })}
+      </div>
+    </div>
+  </section>;
+}
+
+function HomeProductShelves() {
+  const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]>>({
+    queryKey: ["home-catalogue"],
+    queryFn: () => fetchAllCatalogueProducts({ search: "", category: ALL_DEVICES_CATEGORY, sort: "Newest" }),
+    retry: false,
+  });
+  if (isLoading) return <>
+    <DealsOfTheDay products={[]} isLoading />
+    <HomePromotions />
+    <ProductShelfLoading id="new-arrivals" title="Recently added" />
+  </>;
+  if (isError || !data) return <>
+    <DealsOfTheDay products={[]} isError />
+    <HomePromotions />
+    <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus state="error" /></div></section>
+  </>;
+
+  const products = data.data;
+  const catalogueCategories = [...new Set(products.map(product => product.category))];
+  const deals = products
+    .filter(product => product.stockQuantity > 0 && product.originalPriceInPaise !== null && product.originalPriceInPaise !== undefined && product.originalPriceInPaise > product.priceInPaise)
+    .sort((left, right) => discountPercent(right.priceInPaise, right.originalPriceInPaise) - discountPercent(left.priceInPaise, left.originalPriceInPaise))
+    .slice(0, 8);
+  const categoryShelves = shopCategories.slice(0, 3).map(category => {
+    const value = resolveShopCategory(category.value, catalogueCategories);
+    return {
+      ...category,
+      products: products.filter(product => product.category.toLocaleLowerCase() === value.toLocaleLowerCase()).slice(0, 8),
+    };
+  }).filter(category => category.products.length > 0);
+
+  return <>
+    <DealsOfTheDay products={deals} />
+    <HomePromotions />
+    <ProductRail id="new-arrivals" eyebrow="Fresh from the catalogue" title="Recently added" products={products.slice(0, 8)} viewAllTo={`${SHOP_ROUTE}?sort=newest`} />
+    {categoryShelves.map(category => <ProductRail
+      id={`shelf-${category.value}`}
+      eyebrow="Available in the catalogue"
+      title={category.label}
+      products={category.products}
+      viewAllTo={categoryHref(category.value, catalogueCategories)}
+      key={category.value}
+    />)}
+    <ShopByBudget products={products} />
+    <BrandDiscovery products={products} />
+  </>;
 }
 function PageIntro({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) {
   return <section className="page-intro"><div className="container narrow"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="intro-text">{text}</p></div></section>;
 }
 
+const heroPromotions = [
+  {
+    eyebrow: "A fresh start for your next phone",
+    title: "Your next phone is here.",
+    image: HERO_IMAGES[0],
+    category: "mobiles",
+  },
+  {
+    eyebrow: "Bigger screen, bigger possibilities",
+    title: "Your next tablet is here.",
+    image: HERO_IMAGES[1],
+    category: "tablets",
+  },
+  {
+    eyebrow: "Power that goes where you do",
+    title: "Your next laptop is here.",
+    image: HERO_IMAGES[2],
+    category: "laptops",
+  },
+];
+
+function HomeHero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
+  const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
+  const { data: categories = [] } = useQuery<string[]>({
+    queryKey: ["categories"],
+    queryFn: () => apiRequest<string[]>("/categories").then(result => result.data),
+  });
+  const changeSlide = (direction: number) => setActiveSlide(index => (index + direction + heroPromotions.length) % heroPromotions.length);
+  useEffect(() => {
+    if (isHovered || isInteracting) return;
+    const timer = window.setInterval(() => {
+      setActiveSlide(index => (index + 1) % heroPromotions.length);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [isHovered, isInteracting]);
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if ((event.pointerType === "mouse" && event.button !== 0) || (event.target instanceof Element && event.target.closest("a, button"))) return;
+    pointerStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    setIsInteracting(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = pointerStart.current;
+    if (!start || start.id !== event.pointerId) return;
+    const offsetX = event.clientX - start.x;
+    const offsetY = event.clientY - start.y;
+    if (Math.abs(offsetY) > Math.abs(offsetX) && Math.abs(offsetY) > 10) {
+      pointerStart.current = null;
+      setDragOffset(0);
+      setIsInteracting(false);
+      return;
+    }
+    if (Math.abs(offsetX) > 6) setDragOffset(Math.max(-150, Math.min(150, offsetX)));
+  };
+  const finishPointer = (event: React.PointerEvent<HTMLDivElement>, shouldChangeSlide: boolean) => {
+    const start = pointerStart.current;
+    if (!start || start.id !== event.pointerId) return;
+    const offsetX = event.clientX - start.x;
+    pointerStart.current = null;
+    setDragOffset(0);
+    setIsInteracting(false);
+    if (shouldChangeSlide && Math.abs(offsetX) > 48) changeSlide(offsetX < 0 ? 1 : -1);
+  };
+  const handleCarouselKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      changeSlide(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      changeSlide(1);
+    }
+  };
+  return <section
+    className="hero hero-carousel"
+    aria-label="MobieDoor featured offers"
+    aria-roledescription="carousel"
+    tabIndex={0}
+    onKeyDown={handleCarouselKeyDown}
+    onMouseEnter={() => setIsHovered(true)}
+    onMouseLeave={() => setIsHovered(false)}
+  >
+    <div
+      className="hero-carousel-viewport"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={event => finishPointer(event, true)}
+      onPointerCancel={event => finishPointer(event, false)}
+    >
+      <div
+        className={`hero-carousel-track${isInteracting ? " is-dragging" : ""}`}
+        style={{ transform: `translate3d(calc(${-activeSlide * 100}% + ${dragOffset}px), 0, 0)` }}
+      >
+        {heroPromotions.map((slide, index) => <div
+          className="hero-carousel-slide"
+          role="group"
+          aria-roledescription="slide"
+          aria-label={`${index + 1} of ${heroPromotions.length}`}
+          aria-hidden={index !== activeSlide}
+          ref={element => element?.toggleAttribute("inert", index !== activeSlide)}
+          key={slide.title}
+        >
+          <div className="container hero-grid">
+            <div className="hero-copy" aria-live={index === activeSlide ? "polite" : undefined}>
+              <p className="eyebrow light">{slide.eyebrow}</p>
+              <h1>{slide.title}</h1>
+              <div className="hero-actions">
+                <Button to={categoryHref(slide.category, categories)}>Shop now</Button>
+                <Button to={SHOP_ROUTE} variant="outline">Explore devices</Button>
+              </div>
+              <div className="hero-proof"><span><CircleCheck size={16} /> Live listings, lower prices</span></div>
+            </div>
+            <div className="hero-visual">
+              <div className="hero-image"><FallbackImage
+                className="hero-product-image"
+                loading={index === 0 ? "eager" : "lazy"}
+                fetchPriority={index === activeSlide ? "high" : "auto"}
+                src={slide.image.src}
+                alt={slide.image.alt}
+                style={{ objectPosition: slide.image.objectPosition }}
+              /></div>
+            </div>
+          </div>
+        </div>)}
+      </div>
+    </div>
+    <div className="hero-carousel-controls" role="group" aria-label="Featured banner controls">
+      <button type="button" aria-label="Previous banner" onClick={() => changeSlide(-1)}><ChevronLeft size={18} /></button>
+      {heroPromotions.map((promotion, index) => <button
+        type="button"
+        className={`hero-carousel-dot${index === activeSlide ? " active" : ""}`}
+        key={promotion.title}
+        aria-label={`Show banner ${index + 1}`}
+        aria-pressed={index === activeSlide}
+        onClick={() => setActiveSlide(index)}
+      />)}
+      <button type="button" aria-label="Next banner" onClick={() => changeSlide(1)}><ChevronRight size={18} /></button>
+    </div>
+  </section>;
+}
+
+function ServiceHighlights() {
+  const highlights: Array<{ title: string; text: string; icon: LucideIcon; to?: string }> = [
+    { title: "MobieDoor Verified", text: "Clear condition grades on published listings.", icon: BadgeCheck },
+    { title: "Live catalogue details", text: "Compare listed prices and current stock.", icon: PackageCheck },
+    { title: "Product support", text: "Ask our team about a device before enquiring.", icon: CircleHelp, to: "/contact" },
+    { title: "Trade-in enquiries", text: "Send your device details through our form.", icon: Recycle, to: "/trade-in" },
+  ];
+  return <section className="service-highlights" aria-label="MobieDoor service highlights"><div className="container service-highlight-grid">
+    {highlights.map(({ title, text, icon: Icon, to }) => {
+      const content = <><span className="service-highlight-icon"><Icon size={20} aria-hidden="true" /></span><span className="service-highlight-copy"><strong>{title}</strong><small>{text}</small></span></>;
+      return to
+        ? <Link className="service-highlight" to={to} key={title}>{content}<ArrowRight size={15} aria-hidden="true" /></Link>
+        : <div className="service-highlight" key={title}>{content}</div>;
+    })}
+  </div></section>;
+}
+
+function HomePromotions() {
+  return <section className="section home-promotions-section" aria-label="More ways to shop MobieDoor">
+    <div className="container">
+      <div className="home-promo-grid">
+        <article className="home-promo-card explore-promo">
+          <img src="/categories/laptops-photo.jpg" alt="" loading="lazy" decoding="async" />
+          <div><p className="eyebrow">Explore devices</p><h2>Find your next device.</h2><p>Compare current listings, condition grades and stock.</p></div>
+          <Link to={SHOP_ROUTE}>Shop devices <ArrowRight size={16} /></Link>
+        </article>
+        <article className="home-promo-card trade-in-promo">
+          <img src="/categories/trade-in-phone.jpg" alt="" loading="lazy" decoding="async" />
+          <div><p className="eyebrow">Trade in</p><h2>Give a device a next chapter.</h2><p>Share your device details with the MobieDoor team.</p></div>
+          <Link to="/trade-in">Start a trade-in <ArrowRight size={16} /></Link>
+        </article>
+      </div>
+    </div>
+  </section>;
+}
+
 function Home() {
   return <>
-    <section className="hero"><div className="container hero-grid"><div className="hero-copy"><p className="eyebrow light">The smarter way to own tech</p>    <h1>Good technology should go further.</h1><p className="hero-text">Premium refurbished devices, thoughtfully restored and ready for their next chapter. Better for your pocket. Better for the planet.</p><div className="hero-actions"><Button to={SHOP_ROUTE}>Explore devices</Button><Button to="/trade-in" variant="outline">Trade in your device</Button></div><div className="hero-proof"><span><CircleCheck size={16} /> 40+ point quality check</span><span><CircleCheck size={16} /> Warranty included</span></div></div><div className="hero-visual"><div className="hero-image">    <FallbackImage src="https://images.unsplash.com/photo-1632661674596-df8be070a5c5?auto=format&fit=crop&w=1200&q=85" alt="Refurbished smartphone on a clean desk" /></div><div className="floating-card"><span className="check-icon"><BadgeCheck size={20} /></span><div><strong>MobieDoor verified</strong><small>Quality you can feel</small></div></div><div className="hero-stamp"><span>Since</span><strong>2026</strong><span>India</span></div></div></div></section>
-    <section className="trust-bar"><div className="container trust-items"><span><ShieldCheck size={19} /> Verified quality</span><span><Truck size={19} /> Delivered with care</span><span><Clock3 size={19} /> 6 month warranty</span><span><Leaf size={19} /> Circular by design</span></div></section>
+    <HomeHero />
     <ShopByCategory />
-    <section className="section soft-section"><div className="container split-section"><RefurbishmentVisual className="section-image" /><div className="split-copy"><p className="eyebrow">Why MobieDoor</p><h2>Renewed, not compromised.</h2><p>We believe choosing refurbished should feel like an upgrade. Every device is assessed, restored and verified by our team before it reaches you.</p><ul className="feature-list"><li><span><PackageCheck size={20} /></span><div><strong>Honest condition grades</strong><small>No vague “like new” claims. Just clear, useful detail.</small></div></li><li><span><Wrench size={20} /></span><div><strong>Technician-led checks</strong><small>Performance, battery, camera and more, tested properly.</small></div></li><li><span><Leaf size={20} /></span><div><strong>A lighter footprint</strong><small>Extending a device's life keeps useful tech in circulation.</small></div></li></ul><Button to="/how-it-works" variant="text">See our process</Button></div></div></section>
-    <section className="section"><div className="container"><SectionHeading eyebrow="More than a marketplace" title="A circular system, made human." text="From first collection to final delivery, we put care into every handover." /><div className="service-grid">{services.map(({ icon: Icon, eyebrow, title, text }) => <article className="service-card" key={title}><div className="service-icon"><Icon size={22} /></div><p className="card-eyebrow">{eyebrow}</p><h3>{title}</h3><p>{text}</p><Link to="/services">Learn more <ChevronRight size={16} /></Link></article>)}</div></div></section>
-    <LifecycleSection />
-    <Testimonials /><Faq />
+    <ServiceHighlights />
+    <HomeProductShelves />
+    <Testimonials />
   </>;
 }
 
-function Testimonials() { return <section className="section testimonial-section"><div className="container"><SectionHeading eyebrow="Customer feedback" title="Trust is built through real experiences." text="We will share verified customer feedback here as it is received and approved." /><div className="review-empty-state"><ShieldCheck size={25} /><p>Customer reviews will appear here as verified feedback is received.</p><Link className="button outline" to="/contact">Share your experience <ArrowRight size={16} /></Link></div></div></section>; }
-function Faq() { const [open, setOpen] = useState<number | null>(0); const items = [["What does MobieDoor verified mean?", "Every device goes through a structured diagnostic covering display, battery, camera, connectivity, charging and more. We then grade it honestly so you know exactly what to expect."], ["Do refurbished devices come with a warranty?", "Yes. Eligible devices include a six-month limited warranty. The specific coverage is shown clearly on each product detail page."], ["How does trade-in work?", "Tell us about your device using our collection request form. Our team reviews the details, gets in touch with an estimate and arranges the next step."], ["Where do you deliver?", "We are building a reliable delivery network across India, starting with Tier 2 and Tier 3 cities. Reach out if you want to check your pin code."]]; return <section className="section faq-section"><div className="container faq-grid"><div><p className="eyebrow">Questions, answered</p><h2>Clarity is part of the service.</h2><p className="section-lead">Still curious? Our team is happy to help.</p><Button to="/contact" variant="text">Talk to our team</Button></div><div className="faq-list">{items.map(([question, answer], i) => <div className={`faq-item ${open === i ? "open" : ""}`} key={question}><button onClick={() => setOpen(open === i ? null : i)}><span>{question}</span><ChevronDown size={18} /></button>{open === i && <p>{answer}</p>}</div>)}</div></div></section>; }
+function Testimonials() { return <section className="section testimonial-section"><div className="container"><SectionHeading eyebrow="Customer feedback" title="Reviews, when they’re ready." text="Customer feedback will be shared here once verified." /><div className="review-empty-state"><ShieldCheck size={25} /><p>No verified customer reviews are available yet.</p><Link className="button outline" to="/contact">Contact MobieDoor <ArrowRight size={16} /></Link></div></div></section>; }
+function Faq() { const [open, setOpen] = useState<number | null>(0); const items = [["What does MobieDoor Verified mean?", "The badge identifies a product in MobieDoor’s published catalogue. Condition, specifications, price and current availability are shown on its product page; contact our team if you need more detail."], ["Do refurbished devices come with a warranty?", "Warranty information is shown on the individual product page when it is available for that device."], ["How does trade-in work?", "Tell us about your device using our collection request form. Our team reviews the details, gets in touch with an estimate and arranges the next step."], ["Where do you deliver?", "Please contact our team to confirm delivery availability for your location."]]; return <section className="section faq-section"><div className="container faq-grid"><div><p className="eyebrow">Questions, answered</p><h2>Clarity is part of the service.</h2><p className="section-lead">Still curious? Our team is happy to help.</p><Button to="/contact" variant="text">Talk to our team</Button></div><div className="faq-list">{items.map(([question, answer], i) => <div className={`faq-item ${open === i ? "open" : ""}`} key={question}><button onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}><span>{question}</span><ChevronDown size={18} /></button>{open === i && <p>{answer}</p>}</div>)}</div></div></section>; }
 
 function About() { return <><PageIntro eyebrow="Our story" title="Making better technology easier to choose." text="MobieDoor exists to make the circular economy feel simple, trustworthy and genuinely useful — starting with the devices we rely on every day." /><section className="section"><div className="container split-section about-split"><div className="split-copy"><p className="eyebrow">A practical kind of optimism</p><h2>There is more life in good technology.</h2><p>India is full of capable devices that are underused, overlooked or discarded too soon. We bring the right people and processes together to give that technology a meaningful second chapter.</p><p>That means reliable devices at fairer prices, better access outside the biggest cities, and fewer resources spent making things we already have.</p><Button to="/services">What we do</Button></div><RefurbishmentVisual className="section-image tall" /></div></section><section className="dark-section"><div className="container values"><p className="eyebrow light">What guides us</p><h2>Trust is built in the details.</h2><div className="value-grid">{[["01", "Be transparent", "Clear condition, clear pricing, clear expectations. Always."], ["02", "Do the work properly", "Quality is not a label we add at the end. It is the process."], ["03", "Keep it moving", "Every device in circulation is a small, practical step forward."]].map(([number, title, text]) => <div key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></div>)}</div></div></section></>; }
 
@@ -202,30 +694,83 @@ function Services() { return <><PageIntro eyebrow="What we do" title="The full j
 
 function Products() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: categoryData } = useQuery<string[]>({ queryKey: ["categories"], queryFn: () => apiRequest<string[]>("/categories").then(result => result.data) });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const { data: categoryData = [] } = useQuery<string[]>({ queryKey: ["categories"], queryFn: () => apiRequest<string[]>("/categories").then(result => result.data) });
   const { search, category, sort } = readShopFilters(searchParams, categoryData ?? []);
+  const refinements = readShopRefinements(searchParams);
   const page = readShopPage(searchParams);
   const updateFilter = (key: "search" | "category" | "sort", value: string) => {
     setSearchParams(updateShopFilter(searchParams, key, value), { replace: true });
   };
+  const updateRefinement = (key: "brand" | "minPrice" | "maxPrice" | "condition" | "availability", value: string) => {
+    setSearchParams(updateShopRefinement(searchParams, key, value), { replace: true });
+  };
   const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]>>({
-    queryKey: ["products", search, category, sort, page],
-    queryFn: () => {
-      const query = productsQuery({ search, category, sort }, page).toString();
-      return apiRequest<Product[]>(`/products${query ? `?${query}` : ""}`);
-    },
+    queryKey: ["products", search, category, sort],
+    queryFn: () => fetchAllCatalogueProducts({ search, category, sort }),
     retry: false,
   });
+  const allProducts = data?.data ?? [];
+  const filteredProducts = filterShopProducts(allProducts, refinements);
+  const pageSize = 12;
+  const totalPages = Math.ceil(filteredProducts.length / pageSize);
   useEffect(() => {
-    const totalPages = data?.meta?.totalPages;
-    if (totalPages === undefined) return;
+    if (!data) return;
     if (totalPages === 0 && page !== 1) setSearchParams(updateShopPage(searchParams, 1), { replace: true });
     else if (totalPages > 0 && page > totalPages) setSearchParams(updateShopPage(searchParams, totalPages), { replace: true });
-  }, [data?.meta?.totalPages, page, searchParams, setSearchParams]);
-  const products = data?.data ?? [];
-  const hasFilters = Boolean(search.trim() || category !== ALL_DEVICES_CATEGORY);
+  }, [data, page, searchParams, setSearchParams, totalPages]);
+  const products = filteredProducts.slice((page - 1) * pageSize, page * pageSize);
+  const brands = [ ...new Set(allProducts.map(product => product.brand)) ].sort((left, right) => left.localeCompare(right));
+  const hasFilters = Boolean(search.trim()
+    || category !== ALL_DEVICES_CATEGORY
+    || sort !== "Featured"
+    || refinements.brand
+    || refinements.minPrice !== null
+    || refinements.maxPrice !== null
+    || refinements.condition
+    || refinements.availability);
   const clearFilters = () => setSearchParams(clearShopFilters(searchParams), { replace: true });
-  return <><PageIntro eyebrow="The collection" title="Devices with more to give." text="Browse verified technology that has been carefully restored and honestly described. Better value, without the guesswork." /><section className="section catalogue"><div className="container"><div className="catalogue-toolbar"><label className="search-field"><Search size={18} /><input value={search} onChange={e => updateFilter("search", e.target.value)} placeholder="Search by brand or model" /><button type="button" className="clear-search" onClick={() => updateFilter("search", "")} disabled={!search} aria-label="Clear search">×</button></label><div className="filters"><select aria-label="Filter by category" value={category} onChange={e => updateFilter("category", e.target.value)}><option>{ALL_DEVICES_CATEGORY}</option>{(categoryData ?? []).map(item => <option key={item}>{item}</option>)}</select><select aria-label="Sort products" value={sort} onChange={e => updateFilter("sort", e.target.value)}><option>Featured</option><option>Price: low to high</option><option>Price: high to low</option></select></div></div>{isLoading && <CatalogueStatus state="loading" />}{isError && <CatalogueStatus state="error" />}{data && products.length === 0 && <CatalogueStatus state="empty" hasFilters={hasFilters} onClear={clearFilters} />}{data && products.length > 0 && <><div className="product-grid api-products">{products.map(product => <Link className="product-card" to={`/products/${product.slug}`} key={product.id}><div className="product-image"><FallbackImage src={product.imageUrls[0]} alt={product.name} /><span className="condition-tag">{product.condition.replace("_", " ")}</span></div><div className="product-info"><div><h3>{product.name}</h3><p>{product.brand} · {product.model}</p></div><strong>{formatInr(product.priceInPaise)}</strong>{product.originalPriceInPaise && product.originalPriceInPaise > product.priceInPaise && <small className="original-price">{formatInr(product.originalPriceInPaise)} · {discountPercent(product.priceInPaise, product.originalPriceInPaise)}% off</small>}</div></Link>)}</div><CataloguePagination page={page} totalPages={data.meta?.totalPages ?? 1} onPrevious={() => setSearchParams(updateShopPage(searchParams, page - 1), { replace: true })} onNext={() => setSearchParams(updateShopPage(searchParams, page + 1), { replace: true })} /></>}</div></section></>;
+  const selectedCategory = (value: string) => category === resolveShopCategory(value, categoryData);
+  const visibleStart = filteredProducts.length === 0 ? 0 : (page - 1) * pageSize + 1;
+  const visibleEnd = Math.min(page * pageSize, filteredProducts.length);
+
+  return <>
+    <section className="catalogue-hero"><div className="container"><p className="eyebrow">MobieDoor catalogue</p><h1>Find your next device.</h1><p>Browse live listings and compare the details that matter.</p></div></section>
+    <section className="section catalogue-page">
+      <div className="container">
+        <nav className="catalogue-categories" aria-label="Browse device categories">
+          <button type="button" className={category === ALL_DEVICES_CATEGORY ? "active" : ""} aria-pressed={category === ALL_DEVICES_CATEGORY} onClick={() => updateFilter("category", ALL_DEVICES_CATEGORY)}>All Devices</button>
+          {shopCategories.map(({ value, label, icon: Icon }) => <button
+            type="button"
+            className={selectedCategory(value) ? "active" : ""}
+            aria-pressed={selectedCategory(value)}
+            onClick={() => updateFilter("category", resolveShopCategory(value, categoryData))}
+            key={value}
+          ><Icon size={16} aria-hidden="true" />{label}</button>)}
+        </nav>
+        <div className="catalogue-toolbar">
+          <label className="search-field"><Search size={18} aria-hidden="true" /><input value={search} onChange={event => updateFilter("search", event.target.value)} placeholder="Search by brand or model" aria-label="Search products" /><button type="button" className="clear-search" onClick={() => updateFilter("search", "")} disabled={!search} aria-label="Clear search">×</button></label>
+          <label className="sort-control"><span>Sort by</span><select aria-label="Sort products" value={sort} onChange={event => updateFilter("sort", event.target.value)}><option>Featured</option><option>Newest</option><option>Price: low to high</option><option>Price: high to low</option></select></label>
+          <button className="filter-drawer-toggle" type="button" aria-controls="catalogue-refinements" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={17} /> Filters</button>
+        </div>
+        <div id="catalogue-refinements" className={`catalogue-refinements${filtersOpen ? " is-open" : ""}`}>
+          <label><span>Brand</span><select aria-label="Filter by brand" value={refinements.brand} onChange={event => updateRefinement("brand", event.target.value)}><option value="">All brands</option>{brands.map(brand => <option key={brand} value={brand}>{brand}</option>)}</select></label>
+          <div className="price-range-fields"><span>Price range</span><div><label><span className="visually-hidden">Minimum price in rupees</span><input aria-label="Minimum price in rupees" type="number" min="0" step="100" placeholder="Min ₹" value={searchParams.get("minPrice") ?? ""} onChange={event => updateRefinement("minPrice", event.target.value)} /></label><label><span className="visually-hidden">Maximum price in rupees</span><input aria-label="Maximum price in rupees" type="number" min="0" step="100" placeholder="Max ₹" value={searchParams.get("maxPrice") ?? ""} onChange={event => updateRefinement("maxPrice", event.target.value)} /></label></div></div>
+          <label><span>Condition</span><select aria-label="Filter by condition" value={refinements.condition} onChange={event => updateRefinement("condition", event.target.value)}><option value="">All conditions</option><option value="LIKE_NEW">Like new</option><option value="EXCELLENT">Excellent</option><option value="GOOD">Good</option><option value="FAIR">Fair</option></select></label>
+          <label><span>Availability</span><select aria-label="Filter by availability" value={refinements.availability} onChange={event => updateRefinement("availability", event.target.value)}><option value="">Any availability</option><option value="in-stock">In stock</option><option value="out-of-stock">Out of stock</option></select></label>
+          {hasFilters && <button className="clear-all-filters" type="button" onClick={clearFilters}>Clear filters</button>}
+        </div>
+        {data && !isError && filteredProducts.length > 0 && <p className="product-results-count" role="status">Showing {visibleStart}–{visibleEnd} of {filteredProducts.length} devices</p>}
+        {isLoading && <CatalogueSkeletonGrid count={12} />}
+        {isError && <CatalogueStatus state="error" />}
+        {data && filteredProducts.length === 0 && <CatalogueStatus state="empty" hasFilters={hasFilters} onClear={clearFilters} />}
+        {data && filteredProducts.length > 0 && <>
+          <div className="product-grid api-products">{products.map(product => <ProductCard product={product} key={product.id} />)}</div>
+          {totalPages > 1 && <CataloguePagination page={page} totalPages={totalPages} onPrevious={() => setSearchParams(updateShopPage(searchParams, page - 1), { replace: true })} onNext={() => setSearchParams(updateShopPage(searchParams, page + 1), { replace: true })} />}
+        </>}
+      </div>
+    </section>
+  </>;
 }
 
 function ProductDetails() {
@@ -245,7 +790,7 @@ function FormPage({ type }: { type: "trade" | "partner" | "contact" }) {
   return <><PageIntro eyebrow={copy.eyebrow} title={copy.title} text={copy.text} /><section className="section form-section"><div className="container form-layout"><div className="form-aside"><div className="service-icon"><CircleCheck size={22} /></div><h2>A considered next step.</h2><p>Your details are sent securely to the MobieDoor team and saved only after the backend confirms receipt.</p><div className="aside-note"><Clock3 size={17} /><span>We typically respond within one business day.</span></div></div><form className="enquiry-form" onSubmit={submit}><div className="form-row"><label>{type === "partner" ? "Company name" : "Your name"}<input name={type === "partner" ? "companyName" : type === "trade" ? "customerName" : "name"} required placeholder={type === "partner" ? "Your company" : "Your full name"} /></label><label>Email address<input name="email" required type="email" placeholder="you@example.com" /></label></div>{type === "partner" && <div className="form-row"><label>Your name<input name="contactName" required placeholder="Contact person" /></label><label>City<input name="city" required placeholder="Where are you based?" /></label></div>}{type === "trade" && <><div className="form-row"><label>City<input name="city" required placeholder="Where are you based?" /></label><label>Device brand<input name="deviceBrand" required placeholder="e.g. Apple, Samsung" /></label></div><div className="form-row"><label>Device model<input name="deviceModel" required placeholder="e.g. iPhone 13" /></label><label>Condition<input name="deviceCondition" required placeholder="e.g. Excellent" /></label></div></>}<label>Phone number<input name="phoneNumber" required type="tel" placeholder="+91 00000 00000" /></label><label>{type === "trade" ? "Tell us about its condition" : "How can we help?"}<textarea name={type === "trade" ? "additionalDescription" : "message"} required rows={5} placeholder={type === "trade" ? "Any details about age, condition or accessories..." : "A little context helps us give you a thoughtful reply..."} /></label><button className="button primary" type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Sending..." : copy.action}<ArrowRight size={16} /></button>{sent && <p className="form-status" role="status">Thanks — your request has been received by MobieDoor.</p>}{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></section></>; }
 
 function Contact() { return <FormPage type="contact" />; }
-function HowItWorks() { const steps: Array<{ title: string; text: string; icon: LucideIcon }> = [{ title: "Collection", text: "We gather capable devices from individuals and partners.", icon: Recycle }, { title: "Diagnostics", text: "We test the details that determine real-world reliability.", icon: Search }, { title: "Refurbishment", text: "We restore what needs attention and prepare it properly.", icon: Wrench }, { title: "Verification", text: "We grade it honestly and stand behind the result.", icon: ShieldCheck }, { title: "Your next chapter", text: "You get better technology, with confidence built in.", icon: Sparkles }]; return <><PageIntro eyebrow="How it works" title="A better device starts with a better process." text="No shortcuts, no mystery. Just a clear path from collection to a device you can rely on." /><section className="section"><div className="container process-grid">{steps.map(({ title, text, icon: Icon }, i) => <div className="process-step" key={title}><span>0{i + 1}</span><div className="service-icon"><Icon size={22} /></div><h2>{title}</h2><p>{text}</p></div>)}</div></section></>; }
+function HowItWorks() { const steps: Array<{ title: string; text: string; icon: LucideIcon }> = [{ title: "Collection", text: "We gather capable devices from individuals and partners.", icon: Recycle }, { title: "Diagnostics", text: "We test the details that determine real-world reliability.", icon: Search }, { title: "Refurbishment", text: "We restore what needs attention and prepare it properly.", icon: Wrench }, { title: "Verification", text: "We grade it honestly and stand behind the result.", icon: ShieldCheck }, { title: "Your next chapter", text: "You get better technology, with confidence built in.", icon: Sparkles }]; return <><PageIntro eyebrow="How it works" title="A better device starts with a better process." text="No shortcuts, no mystery. Just a clear path from collection to a device you can rely on." /><section className="section"><div className="container process-grid">{steps.map(({ title, text, icon: Icon }, i) => <div className="process-step" key={title}><span>0{i + 1}</span><div className="service-icon"><Icon size={22} /></div><h2>{title}</h2><p>{text}</p></div>)}</div></section><Faq /></>; }
 
 function Login() {
   const [error, setError] = useState("");
@@ -353,7 +898,7 @@ function AdminDashboard() {
   }
   if (me.data?.role === "CUSTOMER") return <Navigate to="/account" replace />;
   const stats = dashboard.data;
-  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><div className="admin-user"><span>{me.data?.name.slice(0, 1)}</span><div><strong>{me.data?.name}</strong><small>{me.data?.role}</small></div></div><nav><NavLink to="/admin" end><LayoutDashboard size={17} /> Overview</NavLink><a href="#products"><PackageCheck size={17} /> Products</a><a href="#operations"><CircleHelp size={17} /> Operations</a>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <a href="#operations"><Users size={17} /> Management</a>}</nav><button className="admin-logout" disabled={logout.isPending} onClick={() => logout.mutate()}><LogOut size={17} /> {logout.isPending ? "Signing out..." : "Sign out"}</button></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">MobieDoor operations</p><h1>Good morning, {me.data?.name.split(" ")[0]}.</h1></div><span className="secure-badge"><ShieldCheck size={15} /> Secure workspace</span></div>{dashboard.isLoading && <div className="admin-panel"><p className="admin-muted">Loading dashboard data...</p></div>}{dashboard.isError && <div className="admin-panel form-status form-error" role="alert">Dashboard data could not be loaded. Please refresh or sign in again.</div>}{!dashboard.isLoading && !dashboard.isError && <><div className="admin-stats">{[["Total products", stats?.totalProducts ?? 0], ["Published", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["New contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="admin-stat" key={label as string}><span>{label}</span><strong>{value}</strong></div>)}</div><section className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Live overview</p><h2>Business signals</h2></div></div><div className="admin-chart">{[["Published products", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["Contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="chart-row" key={label as string}><span>{label}</span><div className="chart-track"><i style={{ width: `${Math.min(100, Number(value) === 0 ? 0 : Math.max(8, Number(value) / Math.max(1, Number(stats?.inventoryUnits ?? 1)) * 100))}%` }} /></div><strong>{value}</strong></div>)}</div></section><section id="products" className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Catalogue</p><h2>Product inventory</h2></div>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <Button to="/admin/products/new"><Plus size={16} /> Add product</Button>}</div>{products.isLoading ? <p className="admin-muted">Loading products...</p> : products.isError ? <p className="form-status form-error" role="alert">Products could not be loaded.</p> : products.data?.length ? <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Status</span><span>Action</span></div>{products.data.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand} · {product.condition.replace("_", " ")}</small></span><span>{product.sku ?? "—"}</span><span>{product.stockQuantity}</span><span className={product.isPublished ? "status-live" : "status-draft"}>{product.isPublished ? "Published" : "Draft"}</span><span>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <><Link className="small-action" to={`/admin/products/${product.id}/edit`}>Edit</Link><button type="button" className="small-action" onClick={() => publishProduct.mutate({ id: product.id, isPublished: !product.isPublished })}>{product.isPublished ? "Unpublish" : "Publish"}</button><button type="button" className="icon-button" title="Delete product" onClick={() => { if (window.confirm("Delete this product?")) removeProduct.mutate(product.id); }}><Trash2 size={16} /></button></>}</span></div>)}</div> : <div className="admin-empty">No products have been created yet.</div>}</section><div id="operations"><AdminOperations canManage={me.data?.role === "ADMIN" || me.data?.role === "FOUNDER"} /></div></>}</main></div>;
+  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><div className="admin-user"><span>{me.data?.name.slice(0, 1)}</span><div><strong>{me.data?.name}</strong><small>{me.data?.role}</small></div></div><nav><NavLink to="/admin" end><LayoutDashboard size={17} /> Overview</NavLink><a href="#products"><PackageCheck size={17} /> Products</a><a href="#operations"><CircleHelp size={17} /> Operations</a>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <a href="#operations"><Users size={17} /> Management</a>}</nav><button className="admin-logout" disabled={logout.isPending} onClick={() => logout.mutate()}><LogOut size={17} /> {logout.isPending ? "Signing out..." : "Sign out"}</button></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">MobieDoor operations</p><h1>Hello, {me.data?.name}.</h1></div><span className="secure-badge"><ShieldCheck size={15} /> Secure workspace</span></div>{dashboard.isLoading && <div className="admin-panel"><p className="admin-muted">Loading dashboard data...</p></div>}{dashboard.isError && <div className="admin-panel form-status form-error" role="alert">Dashboard data could not be loaded. Please refresh or sign in again.</div>}{!dashboard.isLoading && !dashboard.isError && <><div className="admin-stats">{[["Total products", stats?.totalProducts ?? 0], ["Published", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["New contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="admin-stat" key={label as string}><span>{label}</span><strong>{value}</strong></div>)}</div><section className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Live overview</p><h2>Business signals</h2></div></div><div className="admin-chart">{[["Published products", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["Contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="chart-row" key={label as string}><span>{label}</span><div className="chart-track"><i style={{ width: `${Math.min(100, Number(value) === 0 ? 0 : Math.max(8, Number(value) / Math.max(1, Number(stats?.inventoryUnits ?? 1)) * 100))}%` }} /></div><strong>{value}</strong></div>)}</div></section><section id="products" className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Catalogue</p><h2>Product inventory</h2></div>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <Button to="/admin/products/new"><Plus size={16} /> Add product</Button>}</div>{products.isLoading ? <p className="admin-muted">Loading products...</p> : products.isError ? <p className="form-status form-error" role="alert">Products could not be loaded.</p> : products.data?.length ? <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Status</span><span>Action</span></div>{products.data.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand} · {product.condition.replace("_", " ")}</small></span><span>{product.sku ?? "—"}</span><span>{product.stockQuantity}</span><span className={product.isPublished ? "status-live" : "status-draft"}>{product.isPublished ? "Published" : "Draft"}</span><span>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <><Link className="small-action" to={`/admin/products/${product.id}/edit`}>Edit</Link><button type="button" className="small-action" onClick={() => publishProduct.mutate({ id: product.id, isPublished: !product.isPublished })}>{product.isPublished ? "Unpublish" : "Publish"}</button><button type="button" className="icon-button" title="Delete product" onClick={() => { if (window.confirm("Delete this product?")) removeProduct.mutate(product.id); }}><Trash2 size={16} /></button></>}</span></div>)}</div> : <div className="admin-empty">No products have been created yet.</div>}</section><div id="operations"><AdminOperations canManage={me.data?.role === "ADMIN" || me.data?.role === "FOUNDER"} /></div></>}</main></div>;
 }
 
 function AdminProductForm({ productId }: { productId?: string }) {

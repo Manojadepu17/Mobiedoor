@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, PackageCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { discountPercent, formatInr } from "./price";
+import { VerifiedBadge } from "./verified-badge";
 
 export type ProductDetailsData = {
   name: string;
@@ -38,7 +39,7 @@ function ProductImage({ src, alt }: { src?: string; alt: string }) {
   const [failed, setFailed] = useState(!src);
   return failed
     ? <div className="image-fallback" role="img" aria-label={alt}><PackageCheck size={28} /><span>Image unavailable</span></div>
-    : <img src={src} alt={alt} onError={() => setFailed(true)} />;
+    : <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
 export function ProductDetailContent({ product }: { product: ProductDetailsData }) {
@@ -64,6 +65,7 @@ export function ProductDetailContent({ product }: { product: ProductDetailsData 
       </div>}
     </div>
     <div className="detail-copy">
+      <div className="detail-verification"><VerifiedBadge /></div>
       <p className="eyebrow">{product.condition.replace("_", " ")} condition</p>
       <h1>{product.name}</h1>
       <p className="detail-model">{product.brand} · {product.model}</p>
@@ -77,6 +79,7 @@ export function ProductDetailContent({ product }: { product: ProductDetailsData 
         {product.warrantyMonths ? ` · ${product.warrantyMonths}-month warranty` : ""}
       </p>
       <Link className="button primary" to="/contact">Enquire about this device<ArrowRight size={16} /></Link>
+      <div className="detail-condition-note"><PackageCheck size={18} /><p><strong>{product.condition.replace("_", " ")} condition</strong><span>Condition and specifications are shown as listed for this device. Contact our team if you need more detail before enquiring.</span></p></div>
       <section className="detail-specifications" aria-labelledby="specifications-title">
         <h2 id="specifications-title">Specifications</h2>
         {specifications.length > 0

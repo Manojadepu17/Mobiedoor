@@ -20,6 +20,15 @@ export function CataloguePagination({ page, totalPages, onPrevious, onNext }: {
   </nav>;
 }
 
+export function CatalogueSkeletonGrid({ count = 8 }: { count?: number }) {
+  return <div className="product-grid product-skeleton-grid" role="status" aria-label="Loading devices" aria-busy="true">
+    {Array.from({ length: count }, (_, index) => <div className="product-skeleton-card" key={index} aria-hidden="true">
+      <div className="product-skeleton-image" />
+      <div className="product-skeleton-copy"><span /><span /><span /></div>
+    </div>)}
+  </div>;
+}
+
 export function CatalogueStatus({ state, hasFilters = false, onClear }: CatalogueStatusProps) {
   if (state === "loading") {
     return <div className="catalogue-state" role="status"><Sparkles size={25} /><h2>Loading the collection</h2><p>Checking the latest verified devices.</p></div>;

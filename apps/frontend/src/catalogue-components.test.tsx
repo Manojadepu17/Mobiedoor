@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { CataloguePagination, CatalogueStatus } from "./catalogue-components";
+import { CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
 
 vi.mock("react-router-dom", () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
@@ -11,6 +11,13 @@ function renderStatus(props: React.ComponentProps<typeof CatalogueStatus>) {
 }
 
 describe("catalogue loading, error, and empty states", () => {
+  it("renders accessible product skeletons while a collection is loading", () => {
+    const markup = renderToStaticMarkup(<CatalogueSkeletonGrid count={3} />);
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-label="Loading devices"');
+    expect(markup.match(/product-skeleton-card/g)).toHaveLength(3);
+  });
+
   it("renders a clear loading status", () => {
     const markup = renderStatus({ state: "loading" });
     expect(markup).toContain('role="status"');
