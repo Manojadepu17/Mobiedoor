@@ -1,7 +1,8 @@
-import catAccessories from "../assets/images/cat-accessories.jpg";
-import catLaptops from "../assets/images/cat-laptops.jpg";
-import catMobiles from "../assets/images/cat-mobiles.jpg";
-import catTablets from "../assets/images/cat-tablets.jpg";
+import catAccessories from "../assets/images/category-accessories.png";
+import catLaptops from "../assets/images/category-laptops.png";
+import catMobiles from "../assets/images/category-mobiles.png";
+import catSmartwatches from "../assets/images/category-smartwatches.png";
+import catTablets from "../assets/images/category-tablets.png";
 import heroIphone from "../assets/images/hero-iphone.png";
 import heroLaptop from "../assets/images/hero-laptop.png";
 import heroTablet from "../assets/images/hero-tablet.png";
@@ -36,7 +37,7 @@ export const CATEGORY_IMAGES: Record<string, HomepageImage> = {
   },
   smartwatches: {
     name: "Smartwatches",
-    src: "/categories/smartwatches-photo.jpg",
+    src: catSmartwatches,
     alt: "A smartwatch shown close up.",
     objectPosition: "50% 46%",
   },

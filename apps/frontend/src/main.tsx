@@ -5,7 +5,7 @@ import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, use
 import {
   ArrowRight, ArrowUp, BadgeCheck, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, CircleHelp,
   Clock3, Facebook, Gamepad2, Headphones, Instagram, Laptop, Leaf, Linkedin, Menu, PackageCheck, Recycle,
-  Search, ShieldCheck, Smartphone, Sparkles, SlidersHorizontal, Tablet, Truck, Watch, Wrench,
+  Search, ShieldCheck, Smartphone, Sparkles, SlidersHorizontal, Tablet, Truck, Watch, Wrench, Mail,
   X, Youtube, LogOut, LayoutDashboard, Plus, Trash2, Users, type LucideIcon,
 } from "lucide-react";
 import Cropper, { type Area, type Point } from "react-easy-crop";
@@ -182,8 +182,8 @@ function ShopByCategory() {
   </section>;
 }
 
-function Newsletter() {
-  return <div className="newsletter"><input aria-label="Email address" placeholder="Your email address" type="email" disabled title="Newsletter signup is not available yet" /><button aria-label="Newsletter signup unavailable" type="button" disabled title="Newsletter signup is not available yet"><ArrowRight size={17} /></button></div>;
+function FooterContactLink() {
+  return <Link className="footer-contact-link" to="/contact"><Mail size={16} aria-hidden="true" /><span>Contact our team</span><ArrowRight size={15} aria-hidden="true" /></Link>;
 }
 
 function Header() {
@@ -240,7 +240,7 @@ function Footer() {
     <div><Logo /><p className="footer-intro">Refurbished devices, clear listing details, and a second life for good technology.</p><div className="socials"><a href="https://instagram.com" aria-label="Instagram"><Instagram size={17} /></a><a href="https://linkedin.com" aria-label="LinkedIn"><Linkedin size={17} /></a><a href="https://youtube.com" aria-label="YouTube"><Youtube size={17} /></a><a href="https://facebook.com" aria-label="Facebook"><Facebook size={17} /></a></div></div>
     <div><h3>Explore</h3><Link to="/about">Our story</Link><Link to="/services">What we do</Link><Link to={SHOP_ROUTE}>Shop devices</Link><Link to="/how-it-works">How it works</Link></div>
     <div><h3>Support</h3><Link to="/contact">Contact us</Link><Link to="/trade-in">Trade in a device</Link><Link to="/partnership">Partner with MobieDoor</Link></div>
-    <div><h3>Stay in the loop</h3><p className="footer-small">Thoughtful notes on technology, value and the circular economy.</p><Newsletter /></div>
+    <div><h3>Stay in the loop</h3><p className="footer-small">Newsletter signup is not configured yet. For device or order questions, contact our team.</p><FooterContactLink /></div>
   </div><div className="container footer-bottom"><span>© 2026 MobieDoor Technologies. Built for a better tomorrow.</span><span>Privacy &nbsp;·&nbsp; Terms</span></div></footer>;
 }
 
@@ -447,11 +447,13 @@ function HomeProductShelves() {
   if (isLoading) return <>
     <DealsOfTheDay products={[]} isLoading />
     <HomePromotions />
+    <HotDeals />
     <ProductShelfLoading id="new-arrivals" title="Recently added" />
   </>;
   if (isError || !data) return <>
     <DealsOfTheDay products={[]} isError />
     <HomePromotions />
+    <HotDeals />
     <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus state="error" /></div></section>
   </>;
 
@@ -472,6 +474,7 @@ function HomeProductShelves() {
   return <>
     <DealsOfTheDay products={deals} />
     <HomePromotions />
+    <HotDeals />
     <ProductRail id="new-arrivals" eyebrow="Fresh from the catalogue" title="Recently added" products={products.slice(0, 8)} viewAllTo={`${SHOP_ROUTE}?sort=newest`} />
     {categoryShelves.map(category => <ProductRail
       id={`shelf-${category.value}`}
@@ -669,6 +672,98 @@ function HomePromotions() {
   </section>;
 }
 
+const hotDealCards = [
+  {
+    title: "Buyback Offers",
+    description: "Turn a device you no longer use into value.",
+    to: "/trade-in",
+    image: CATEGORY_IMAGES.mobiles.src,
+    imageClass: "multi",
+    tone: "pink",
+    hasRepairIcon: false,
+  },
+  {
+    title: "Exchange Offers",
+    description: "Trade in your device and find your next one.",
+    to: "/trade-in",
+    image: HERO_IMAGES[0].src,
+    imageClass: "portrait",
+    tone: "mint",
+    hasRepairIcon: false,
+  },
+  {
+    title: "Refurbished Device Offers",
+    description: "Explore verified devices in the live catalogue.",
+    to: SHOP_ROUTE,
+    image: CATEGORY_IMAGES.mobiles.src,
+    imageClass: "multi",
+    tone: "lavender",
+    hasRepairIcon: false,
+  },
+  {
+    title: "Repair Offers",
+    description: "Talk to our team about a device that needs care.",
+    to: "/contact",
+    image: HERO_IMAGES[0].src,
+    imageClass: "portrait",
+    tone: "yellow",
+    hasRepairIcon: true,
+  },
+];
+
+function HotDeals() {
+  return <section className="section hot-deals-section" aria-labelledby="hot-deals-title">
+    <div className="container">
+      <SectionHeading eyebrow="More ways to save" title="Hot Deals" text="Exciting offers for more value" id="hot-deals-title" />
+      <div className="hot-deals-grid">
+        {hotDealCards.map(({ title, description, to, image, imageClass, tone, hasRepairIcon }) => <Link
+          className={`hot-deal-card hot-deal-card--${tone}`}
+          to={to}
+          aria-label={`${title}. ${description}`}
+          key={title}
+        >
+          <span className="hot-deal-copy">
+            <strong>{title}</strong>
+            <span>{description}</span>
+          </span>
+          <img className={`hot-deal-image hot-deal-image--${imageClass}`} src={image} alt="" loading="lazy" decoding="async" />
+          {hasRepairIcon && <span className="hot-deal-repair-icon" aria-hidden="true"><Wrench size={17} /></span>}
+          <span className="hot-deal-arrow" aria-hidden="true"><ArrowRight size={17} /></span>
+        </Link>)}
+      </div>
+    </div>
+  </section>;
+}
+
+const brandLogos = [
+  { name: "Apple", src: "/brand-logos/apple.svg" },
+  { name: "Samsung", src: "/brand-logos/samsung.svg" },
+  { name: "vivo", src: "/brand-logos/vivo.svg" },
+  { name: "OPPO", src: "/brand-logos/oppo.svg" },
+  { name: "Xiaomi", src: "/brand-logos/xiaomi.svg" },
+  { name: "OnePlus", src: "/brand-logos/oneplus.svg" },
+  { name: "Motorola", src: "/brand-logos/motorola.svg" },
+];
+
+function BrandLogoBanner() {
+  return <section className="brand-logo-banner" aria-label="Device brands">
+    <div className="brand-logo-viewport">
+      <div className="brand-logo-track">
+        {[false, true].map(isDuplicate => <div
+          className="brand-logo-group"
+          key={isDuplicate ? "duplicate" : "primary"}
+          aria-hidden={isDuplicate}
+        >
+          {brandLogos.map(brand => <div className="brand-logo" key={brand.name}>
+            <img src={brand.src} alt="" />
+            <span>{brand.name}</span>
+          </div>)}
+        </div>)}
+      </div>
+    </div>
+  </section>;
+}
+
 function Home() {
   return <>
     <HomeHero />
@@ -676,10 +771,65 @@ function Home() {
     <ServiceHighlights />
     <HomeProductShelves />
     <Testimonials />
+    <HomeFaq />
+    <BrandLogoBanner />
   </>;
 }
 
 function Testimonials() { return <section className="section testimonial-section"><div className="container"><SectionHeading eyebrow="Customer feedback" title="Reviews, when they’re ready." text="Customer feedback will be shared here once verified." /><div className="review-empty-state"><ShieldCheck size={25} /><p>No verified customer reviews are available yet.</p><Link className="button outline" to="/contact">Contact MobieDoor <ArrowRight size={16} /></Link></div></div></section>; }
+
+const homepageFaqs = [
+  { question: "What is MobieDoor?", answer: "MobieDoor helps people find refurbished devices and gives capable technology another useful chapter through its device marketplace and trade-in enquiries." },
+  { question: "How can I buy or sell a device on MobieDoor?", answer: "Browse the live catalogue to buy a device and review its listed condition, details, price, and stock. To sell or trade in a device, submit its details through the Trade in form for the team to review." },
+  { question: "Are the devices verified before being listed?", answer: "Listings show available condition and product details. The MobieDoor Verified badge identifies listings in the published catalogue; check each product page for the details specific to that device." },
+  { question: "How can I contact the MobieDoor support team?", answer: "Send your question through the Contact form, which submits to MobieDoor's existing enquiries service." },
+];
+
+function HomeFaq() {
+  const [openQuestion, setOpenQuestion] = useState<number | null>(null);
+  return <section className="section home-faq-section" aria-labelledby="home-faq-title">
+    <div className="container">
+      <SectionHeading
+        eyebrow="Help and support"
+        title="Frequently Asked Questions"
+        text="Find answers to common questions about buying, selling, exchanging, and using MobieDoor."
+        id="home-faq-title"
+      />
+      <div className="home-faq-list">
+        {homepageFaqs.map(({ question, answer }, index) => {
+          const isOpen = openQuestion === index;
+          const questionId = `home-faq-question-${index}`;
+          const answerId = `home-faq-answer-${index}`;
+          return <article className={`home-faq-item${isOpen ? " is-open" : ""}`} key={question}>
+            <h3>
+              <button
+                id={questionId}
+                type="button"
+                aria-expanded={isOpen}
+                aria-controls={answerId}
+                onClick={() => setOpenQuestion(isOpen ? null : index)}
+              >
+                <span>{question}</span>
+                <ChevronDown size={18} aria-hidden="true" />
+              </button>
+            </h3>
+            <div
+              className={`home-faq-answer${isOpen ? " is-open" : ""}`}
+              id={answerId}
+              role="region"
+              aria-labelledby={questionId}
+              aria-hidden={!isOpen}
+            >
+              <div className="home-faq-answer-inner"><p>{answer}</p></div>
+            </div>
+          </article>;
+        })}
+      </div>
+      <Link className="home-faq-contact" to="/contact">Still need help? Contact our team <ArrowRight size={16} aria-hidden="true" /></Link>
+    </div>
+  </section>;
+}
+
 function Faq() { const [open, setOpen] = useState<number | null>(0); const items = [["What does MobieDoor Verified mean?", "The badge identifies a product in MobieDoor’s published catalogue. Condition, specifications, price and current availability are shown on its product page; contact our team if you need more detail."], ["Do refurbished devices come with a warranty?", "Warranty information is shown on the individual product page when it is available for that device."], ["How does trade-in work?", "Tell us about your device using our collection request form. Our team reviews the details, gets in touch with an estimate and arranges the next step."], ["Where do you deliver?", "Please contact our team to confirm delivery availability for your location."]]; return <section className="section faq-section"><div className="container faq-grid"><div><p className="eyebrow">Questions, answered</p><h2>Clarity is part of the service.</h2><p className="section-lead">Still curious? Our team is happy to help.</p><Button to="/contact" variant="text">Talk to our team</Button></div><div className="faq-list">{items.map(([question, answer], i) => <div className={`faq-item ${open === i ? "open" : ""}`} key={question}><button onClick={() => setOpen(open === i ? null : i)} aria-expanded={open === i}><span>{question}</span><ChevronDown size={18} /></button>{open === i && <p>{answer}</p>}</div>)}</div></div></section>; }
 
 function About() { return <><PageIntro eyebrow="Our story" title="Making better technology easier to choose." text="MobieDoor exists to make the circular economy feel simple, trustworthy and genuinely useful — starting with the devices we rely on every day." /><section className="section"><div className="container split-section about-split"><div className="split-copy"><p className="eyebrow">A practical kind of optimism</p><h2>There is more life in good technology.</h2><p>India is full of capable devices that are underused, overlooked or discarded too soon. We bring the right people and processes together to give that technology a meaningful second chapter.</p><p>That means reliable devices at fairer prices, better access outside the biggest cities, and fewer resources spent making things we already have.</p><Button to="/services">What we do</Button></div><RefurbishmentVisual className="section-image tall" /></div></section><section className="dark-section"><div className="container values"><p className="eyebrow light">What guides us</p><h2>Trust is built in the details.</h2><div className="value-grid">{[["01", "Be transparent", "Clear condition, clear pricing, clear expectations. Always."], ["02", "Do the work properly", "Quality is not a label we add at the end. It is the process."], ["03", "Keep it moving", "Every device in circulation is a small, practical step forward."]].map(([number, title, text]) => <div key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></div>)}</div></div></section></>; }
