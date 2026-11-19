@@ -11,7 +11,7 @@ import {
 import Cropper, { type Area, type Point } from "react-easy-crop";
 import { adminPricesToPaise, discountPercent, formatInr, inrToPaise, paiseToInr } from "./price";
 import {
-  ALL_DEVICES_CATEGORY, buildShopBudgetRanges, clearShopFilters, displayShopCategory,
+  ALL_DEVICES_CATEGORY, clearShopFilters, displayShopCategory,
   filterShopProducts, productsQuery, readShopFilters, readShopPage, readShopRefinements,
   resolveShopCategory, SHOP_ROUTE, updateShopFilter, updateShopPage, updateShopRefinement,
   type ShopFilters,
@@ -370,32 +370,43 @@ function DealsOfTheDay({ products, isLoading = false, isError = false }: { produ
   </>;
 }
 
-function ShopByBudget({ products }: { products: Product[] }) {
-  const ranges = buildShopBudgetRanges(products.map(product => product.priceInPaise));
-  if (ranges.length === 0) return null;
+function OrganizationBanner() {
+  return <section className="organization-banner" aria-label="Business laptop enquiry">
+    <div className="organization-banner-art organization-banner-art--left" aria-hidden="true">
+      <img src={HERO_IMAGES[2].src} alt="" />
+    </div>
+    <div className="organization-banner-copy">
+      <h2>Buying laptops for your organization?</h2>
+    </div>
+    <div className="organization-banner-art organization-banner-art--right" aria-hidden="true">
+      <img src={HERO_IMAGES[2].src} alt="" />
+    </div>
+    <Link className="organization-banner-cta" to="/contact">Submit Enquiry <ArrowRight size={15} aria-hidden="true" /></Link>
+  </section>;
+}
+
+const budgetCards = [
+  { label: "Under", price: 1500000, tone: "pink", images: [CATEGORY_IMAGES.laptops.src, CATEGORY_IMAGES.mobiles.src], maxPrice: 1500000 },
+  { label: "Under", price: 3000000, tone: "yellow", images: [CATEGORY_IMAGES.laptops.src, CATEGORY_IMAGES.mobiles.src, CATEGORY_IMAGES.smartwatches.src], maxPrice: 3000000 },
+  { label: "Under", price: 5000000, tone: "cyan", images: [CATEGORY_IMAGES.laptops.src, CATEGORY_IMAGES.mobiles.src, CATEGORY_IMAGES.accessories.src], maxPrice: 5000000 },
+  { label: "Above", price: 5000000, tone: "lavender", images: [CATEGORY_IMAGES.laptops.src, CATEGORY_IMAGES.accessories.src, CATEGORY_IMAGES.mobiles.src], minPrice: 5000001 },
+];
+
+function ShopByBudget() {
   return <section className="section home-shelf budget-section" aria-labelledby="budget-title">
     <div className="container">
-      <SectionHeading id="budget-title" eyebrow="A price that feels right" title="Shop by budget" />
-      <div className={`budget-grid${ranges.length === 1 ? " budget-grid--single" : ""}`}>
-        {ranges.map(({ minPrice, maxPrice }, index) => {
+      <SectionHeading id="budget-title" eyebrow="Find your next device" title="Best Selling Devices" />
+      <div className="budget-grid">
+        {budgetCards.map(({ label, price, tone, images, minPrice, maxPrice }) => {
           const query = new URLSearchParams();
-          if (minPrice !== null) query.set("minPrice", String(minPrice / 100));
-          if (maxPrice !== null) query.set("maxPrice", String(maxPrice / 100));
-          const matchingCount = products.filter(product =>
-            (minPrice === null || product.priceInPaise >= minPrice)
-            && (maxPrice === null || product.priceInPaise <= maxPrice)
-          ).length;
-          const label = minPrice === null && maxPrice !== null
-            ? `Up to ${formatInr(maxPrice)}`
-            : minPrice !== null && maxPrice === null
-              ? `From ${formatInr(minPrice)}`
-              : minPrice !== null && maxPrice !== null && minPrice === maxPrice
-                ? `At ${formatInr(minPrice)}`
-                : minPrice !== null && maxPrice !== null
-                  ? `${formatInr(minPrice)} – ${formatInr(maxPrice)}`
-                  : "Browse devices";
-          return <Link className="budget-card" to={`${SHOP_ROUTE}?${query}`} key={`${minPrice}-${maxPrice}`}>
-            <span>0{index + 1}</span><div><strong>{label}</strong><small>{matchingCount} {matchingCount === 1 ? "device" : "devices"} listed</small></div><ArrowRight size={18} aria-hidden="true" />
+          if (minPrice !== undefined) query.set("minPrice", String(minPrice / 100));
+          if (maxPrice !== undefined) query.set("maxPrice", String(maxPrice / 100));
+          return <Link className={`budget-card budget-card--${tone}`} to={`${SHOP_ROUTE}?${query}`} key={`${label}-${price}`}>
+            <span className="budget-card-copy"><strong>Best Selling Devices</strong><small>{label}</small><b>{formatInr(price)}</b></span>
+            <span className="budget-card-images" aria-hidden="true">
+              {images.map((image, index) => <img src={image} alt="" key={`${tone}-${index}`} />)}
+            </span>
+            <span className="budget-card-arrow" aria-hidden="true"><ArrowRight size={17} /></span>
           </Link>;
         })}
       </div>
@@ -447,13 +458,13 @@ function HomeProductShelves() {
   if (isLoading) return <>
     <DealsOfTheDay products={[]} isLoading />
     <HomePromotions />
-    <HotDeals />
+    <HomeBrandOffers />
     <ProductShelfLoading id="new-arrivals" title="Recently added" />
   </>;
   if (isError || !data) return <>
     <DealsOfTheDay products={[]} isError />
     <HomePromotions />
-    <HotDeals />
+    <HomeBrandOffers />
     <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus state="error" /></div></section>
   </>;
 
@@ -474,7 +485,7 @@ function HomeProductShelves() {
   return <>
     <DealsOfTheDay products={deals} />
     <HomePromotions />
-    <HotDeals />
+    <HomeBrandOffers />
     <ProductRail id="new-arrivals" eyebrow="Fresh from the catalogue" title="Recently added" products={products.slice(0, 8)} viewAllTo={`${SHOP_ROUTE}?sort=newest`} />
     {categoryShelves.map(category => <ProductRail
       id={`shelf-${category.value}`}
@@ -484,7 +495,8 @@ function HomeProductShelves() {
       viewAllTo={categoryHref(category.value, catalogueCategories)}
       key={category.value}
     />)}
-    <ShopByBudget products={products} />
+    <OrganizationBanner />
+    <ShopByBudget />
     <BrandDiscovery products={products} />
   </>;
 }
@@ -672,67 +684,44 @@ function HomePromotions() {
   </section>;
 }
 
-const hotDealCards = [
+const bestSellingPromos = [
   {
-    title: "Buyback Offers",
-    description: "Turn a device you no longer use into value.",
-    to: "/trade-in",
-    image: CATEGORY_IMAGES.mobiles.src,
-    imageClass: "multi",
-    tone: "pink",
-    hasRepairIcon: false,
+    title: <>Best Selling<br /><strong>Android Phones</strong></>,
+    to: `${SHOP_ROUTE}?category=phones`,
+    tone: "android",
+    images: ["/assets/promos/best-selling-android-phones.png"],
   },
   {
-    title: "Exchange Offers",
-    description: "Trade in your device and find your next one.",
-    to: "/trade-in",
-    image: HERO_IMAGES[0].src,
-    imageClass: "portrait",
-    tone: "mint",
-    hasRepairIcon: false,
-  },
-  {
-    title: "Refurbished Device Offers",
-    description: "Explore verified devices in the live catalogue.",
-    to: SHOP_ROUTE,
-    image: CATEGORY_IMAGES.mobiles.src,
-    imageClass: "multi",
-    tone: "lavender",
-    hasRepairIcon: false,
-  },
-  {
-    title: "Repair Offers",
-    description: "Talk to our team about a device that needs care.",
-    to: "/contact",
-    image: HERO_IMAGES[0].src,
-    imageClass: "portrait",
-    tone: "yellow",
-    hasRepairIcon: true,
+    title: <>Best Selling<br /><strong>Apple Phones</strong></>,
+    to: `${SHOP_ROUTE}?category=phones&brand=Apple`,
+    tone: "apple",
+    images: ["/assets/promos/best-selling-apple-phones.png"],
   },
 ];
 
-function HotDeals() {
-  return <section className="section hot-deals-section" aria-labelledby="hot-deals-title">
+function BestSellingPromos() {
+  return <section className="best-selling-section" aria-label="Best selling phones">
     <div className="container">
-      <SectionHeading eyebrow="More ways to save" title="Hot Deals" text="Exciting offers for more value" id="hot-deals-title" />
-      <div className="hot-deals-grid">
-        {hotDealCards.map(({ title, description, to, image, imageClass, tone, hasRepairIcon }) => <Link
-          className={`hot-deal-card hot-deal-card--${tone}`}
+      <div className="best-selling-grid">
+        {bestSellingPromos.map(({ title, to, tone, images }) => <Link
+          className={`best-selling-card best-selling-card--${tone}`}
           to={to}
-          aria-label={`${title}. ${description}`}
-          key={title}
+          aria-label={tone === "android" ? "Shop best selling Android phones" : "Shop best selling Apple phones"}
+          key={tone}
         >
-          <span className="hot-deal-copy">
-            <strong>{title}</strong>
-            <span>{description}</span>
+          <span className="best-selling-copy"><span>{title}</span></span>
+          <span className="best-selling-images" aria-hidden="true">
+            {images.map((image, index) => <img src={image} alt="" loading="lazy" decoding="async" key={`${tone}-${index}`} />)}
           </span>
-          <img className={`hot-deal-image hot-deal-image--${imageClass}`} src={image} alt="" loading="lazy" decoding="async" />
-          {hasRepairIcon && <span className="hot-deal-repair-icon" aria-hidden="true"><Wrench size={17} /></span>}
-          <span className="hot-deal-arrow" aria-hidden="true"><ArrowRight size={17} /></span>
+          <span className="best-selling-arrow" aria-hidden="true"><ArrowRight size={17} /></span>
         </Link>)}
       </div>
     </div>
   </section>;
+}
+
+function HomeBrandOffers() {
+  return <BestSellingPromos />;
 }
 
 const brandLogos = [
