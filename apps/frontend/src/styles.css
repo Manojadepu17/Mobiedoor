@@ -2354,3 +2354,93 @@ h1, h2, h3 { color: var(--brand-navy); }
     transition: none;
   }
 }
+
+@media (max-width: 600px) {
+  .catalogue-page .api-products {
+    gap: 12px;
+    row-gap: 16px;
+  }
+  .catalogue-page .api-products .product-card {
+    height: 370px;
+  }
+  .catalogue-page .api-products .product-image {
+    height: 150px;
+    min-height: 150px;
+    aspect-ratio: auto;
+  }
+  .catalogue-page .api-products .product-image > img {
+    width: 100%;
+    height: 100%;
+    padding: 11px;
+    object-fit: contain;
+  }
+  .catalogue-page .api-products .product-info {
+    min-height: 220px;
+    height: 220px;
+  }
+  .catalogue-page .api-products .product-card:hover,
+  .catalogue-page .api-products .product-card:hover .product-image img {
+    transform: none;
+  }
+
+  .category-nav-section .category-nav-grid {
+    gap: 10px;
+  }
+  .category-nav-section .category-nav-card {
+    height: 168px;
+    min-height: 168px;
+    grid-template-rows: 112px 24px;
+    gap: 4px;
+    padding: 8px;
+  }
+  .category-nav-section .category-nav-card .category-artwork {
+    height: 112px;
+    min-height: 112px;
+  }
+  .category-nav-section .category-nav-card .category-artwork .category-photo {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    padding: 4px;
+    object-fit: contain;
+    object-position: center;
+  }
+  .category-nav-section .category-nav-card h3 {
+    align-self: center;
+    line-height: 1.15;
+  }
+  .category-nav-section .category-nav-arrow {
+    align-self: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .catalogue-page .api-products {
+    gap: 9px;
+  }
+  .catalogue-page .api-products .product-card {
+    height: 350px;
+  }
+  .catalogue-page .api-products .product-image {
+    height: 140px;
+    min-height: 140px;
+  }
+  .catalogue-page .api-products .product-info {
+    min-height: 210px;
+    height: 210px;
+  }
+
+  .category-nav-section .category-nav-grid {
+    gap: 8px;
+  }
+  .category-nav-section .category-nav-card {
+    height: 156px;
+    min-height: 156px;
+    grid-template-rows: 104px 22px;
+  }
+  .category-nav-section .category-nav-card .category-artwork {
+    height: 104px;
+    min-height: 104px;
+  }
+}
