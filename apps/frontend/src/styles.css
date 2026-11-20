@@ -504,6 +504,20 @@ h1, h2, h3 { color: var(--brand-navy); }
 .admin-login { background: var(--brand-navy); }
 .admin-login-card { border-radius: 14px; }
 
+.admin-login-card.auth-card .brand-image {
+  width: auto;
+  height: 72px;
+  max-width: 260px;
+  object-fit: contain;
+}
+
+@media (max-width: 520px) {
+  .admin-login-card.auth-card .brand-image {
+    height: 60px;
+    max-width: 220px;
+  }
+}
+
 @media (max-width: 1180px) {
   .container { width: min(100% - 48px, 1000px); }
   .nav-wrap { height: 72px; }
@@ -2515,4 +2529,71 @@ h1, h2, h3 { color: var(--brand-navy); }
   .catalogue-page .api-products .product-detail-cta {
     font-size: 12px;
   }
+}
+
+.category-nav-grid .category-nav-card:nth-child(1) {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .92) 0, rgba(255, 255, 255, .58) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(158, 190, 255, .48) 0, rgba(184, 204, 255, .24) 24%, transparent 48%),
+    radial-gradient(circle at 68% 72%, rgba(197, 184, 255, .34) 0, transparent 42%),
+    linear-gradient(135deg, #edf5ff 0%, #e9edff 55%, #f1efff 100%);
+  border: 1px solid rgba(153, 183, 238, .72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 12px 28px rgba(72, 112, 181, .10);
+}
+.category-nav-grid .category-nav-card:nth-child(2) {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .94) 0, rgba(255, 255, 255, .62) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(139, 211, 226, .48) 0, rgba(174, 220, 236, .24) 24%, transparent 48%),
+    radial-gradient(circle at 68% 72%, rgba(155, 197, 246, .34) 0, transparent 42%),
+    linear-gradient(135deg, #edfafa 0%, #edf7ff 55%, #ddefff 100%);
+  border: 1px solid rgba(139, 194, 220, .72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 12px 28px rgba(71, 137, 170, .10);
+}
+.category-nav-grid .category-nav-card:nth-child(3) {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .94) 0, rgba(255, 255, 255, .62) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(202, 184, 246, .42) 0, rgba(218, 196, 243, .22) 24%, transparent 48%),
+    radial-gradient(circle at 68% 72%, rgba(245, 188, 213, .38) 0, transparent 42%),
+    linear-gradient(135deg, #f3efff 0%, #f8edf6 55%, #fff1f5 100%);
+  border: 1px solid rgba(196, 175, 224, .72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 12px 28px rgba(145, 113, 164, .10);
+}
+.category-nav-grid .category-nav-card:nth-child(4) {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .94) 0, rgba(255, 255, 255, .62) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(158, 219, 180, .48) 0, rgba(189, 234, 201, .24) 24%, transparent 48%),
+    radial-gradient(circle at 68% 72%, rgba(151, 220, 214, .38) 0, transparent 42%),
+    linear-gradient(135deg, #edf9f1 0%, #eaf8f5 55%, #dff5f4 100%);
+  border: 1px solid rgba(150, 203, 181, .72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 12px 28px rgba(73, 145, 123, .10);
+}
+.category-nav-grid .category-nav-card:nth-child(5) {
+  background:
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .96) 0, rgba(255, 255, 255, .68) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(246, 187, 155, .38) 0, rgba(248, 205, 180, .22) 24%, transparent 48%),
+    radial-gradient(circle at 68% 72%, rgba(214, 194, 238, .30) 0, transparent 42%),
+    linear-gradient(135deg, #fffaf0 0%, #fff6ed 55%, #fbe9df 100%);
+  border: 1px solid rgba(220, 190, 169, .74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 12px 28px rgba(164, 119, 96, .10);
+}
+
+.category-nav-grid .category-nav-card:nth-child(1):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 16px 34px rgba(72, 112, 181, .16);
+  border-color: rgba(129, 168, 232, .86);
+}
+.category-nav-grid .category-nav-card:nth-child(2):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 16px 34px rgba(71, 137, 170, .16);
+  border-color: rgba(112, 180, 210, .86);
+}
+.category-nav-grid .category-nav-card:nth-child(3):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 16px 34px rgba(145, 113, 164, .16);
+  border-color: rgba(180, 150, 214, .86);
+}
+.category-nav-grid .category-nav-card:nth-child(4):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 16px 34px rgba(73, 145, 123, .16);
+  border-color: rgba(125, 190, 164, .86);
+}
+.category-nav-grid .category-nav-card:nth-child(5):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .92), 0 16px 34px rgba(164, 119, 96, .16);
+  border-color: rgba(207, 170, 145, .86);
 }
