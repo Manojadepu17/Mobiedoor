@@ -2294,42 +2294,56 @@ h1, h2, h3 { color: var(--brand-navy); }
 .visual-card-reveal.is-revealed.deal-product-art {
   scale: 1;
 }
+.catalogue-page .visual-card-reveal,
+.catalogue-page .visual-card-reveal.is-revealed {
+  opacity: 1;
+  scale: 1;
+  transition: box-shadow .24s ease, border-color .24s ease;
+  will-change: auto;
+}
 
 .home-promotions-section .explore-promo,
 .home-promotions-section .trade-in-promo,
 .best-selling-card {
   position: relative;
   isolation: isolate;
-  background-image:
-    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 28%),
-    radial-gradient(circle at 58% 82%, rgba(193, 220, 255, .26), transparent 34%);
+  border-color: rgba(174, 193, 222, .72);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .78),
-    0 12px 30px rgba(21, 43, 80, .10);
+    inset 0 1px 0 rgba(255, 255, 255, .88),
+    inset 8px 0 28px rgba(255, 255, 255, .20),
+    0 14px 34px rgba(21, 43, 80, .12);
 }
 .home-promotions-section .explore-promo {
   background-color: #edf4ff;
   background-image:
-    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 28%),
-    radial-gradient(circle at 62% 82%, rgba(175, 207, 255, .34), transparent 38%);
+    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, .98) 0, rgba(255, 255, 255, .64) 9%, transparent 30%),
+    radial-gradient(circle at 12% 88%, rgba(164, 192, 255, .58) 0, rgba(186, 205, 255, .28) 22%, transparent 48%),
+    radial-gradient(circle at 72% 74%, rgba(201, 185, 255, .42) 0, transparent 42%),
+    linear-gradient(135deg, #edf6ff 0%, #e8edff 52%, #f2efff 100%);
 }
 .home-promotions-section .trade-in-promo {
   background-color: #eff4f8;
   background-image:
-    radial-gradient(circle at 80% 16%, rgba(255, 255, 255, .96), transparent 29%),
-    radial-gradient(circle at 58% 78%, rgba(177, 214, 199, .28), transparent 38%);
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .98) 0, rgba(255, 255, 255, .72) 10%, transparent 31%),
+    radial-gradient(circle at 12% 88%, rgba(150, 217, 225, .48) 0, rgba(174, 220, 222, .24) 24%, transparent 48%),
+    radial-gradient(circle at 66% 72%, rgba(192, 190, 246, .38) 0, transparent 43%),
+    linear-gradient(135deg, #edf7f8 0%, #edf2fa 54%, #f1effb 100%);
 }
 .best-selling-card--android {
   background-color: #eff9ed;
   background-image:
-    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 31%),
-    radial-gradient(circle at 62% 78%, rgba(190, 228, 183, .38), transparent 40%);
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, .98) 0, rgba(255, 255, 255, .68) 10%, transparent 31%),
+    radial-gradient(circle at 10% 88%, rgba(169, 225, 189, .58) 0, rgba(191, 235, 200, .30) 24%, transparent 48%),
+    radial-gradient(circle at 68% 74%, rgba(170, 229, 219, .40) 0, transparent 43%),
+    linear-gradient(135deg, #f2faef 0%, #e5f5df 58%, #edf9ef 100%);
 }
 .best-selling-card--apple {
   background-color: #f6f7f8;
   background-image:
-    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .96), transparent 31%),
-    radial-gradient(circle at 62% 78%, rgba(181, 203, 233, .30), transparent 40%);
+    radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 1) 0, rgba(255, 255, 255, .76) 10%, transparent 31%),
+    radial-gradient(circle at 10% 88%, rgba(177, 201, 238, .48) 0, rgba(196, 211, 236, .27) 24%, transparent 48%),
+    radial-gradient(circle at 68% 74%, rgba(205, 192, 238, .34) 0, transparent 43%),
+    linear-gradient(135deg, #fafbfc 0%, #edf1f7 58%, #f3f1fa 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

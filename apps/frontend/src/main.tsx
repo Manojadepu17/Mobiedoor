@@ -276,6 +276,7 @@ function useVisualCardReveal() {
     const revealCards = () => {
       document.querySelectorAll(selector).forEach((card, index) => {
         if (card.closest(".hero")) return;
+        if (card.closest(".catalogue-page")) return;
         if (!(card instanceof HTMLElement)) return;
         if (!card.classList.contains("visual-card-reveal")) {
           card.classList.add("visual-card-reveal");
