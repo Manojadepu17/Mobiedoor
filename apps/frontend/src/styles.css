@@ -2360,29 +2360,6 @@ h1, h2, h3 { color: var(--brand-navy); }
     gap: 12px;
     row-gap: 16px;
   }
-  .catalogue-page .api-products .product-card {
-    height: 370px;
-  }
-  .catalogue-page .api-products .product-image {
-    height: 150px;
-    min-height: 150px;
-    aspect-ratio: auto;
-  }
-  .catalogue-page .api-products .product-image > img {
-    width: 100%;
-    height: 100%;
-    padding: 11px;
-    object-fit: contain;
-  }
-  .catalogue-page .api-products .product-info {
-    min-height: 220px;
-    height: 220px;
-  }
-  .catalogue-page .api-products .product-card:hover,
-  .catalogue-page .api-products .product-card:hover .product-image img {
-    transform: none;
-  }
-
   .category-nav-section .category-nav-grid {
     gap: 10px;
   }
@@ -2416,21 +2393,6 @@ h1, h2, h3 { color: var(--brand-navy); }
 }
 
 @media (max-width: 360px) {
-  .catalogue-page .api-products {
-    gap: 9px;
-  }
-  .catalogue-page .api-products .product-card {
-    height: 350px;
-  }
-  .catalogue-page .api-products .product-image {
-    height: 140px;
-    min-height: 140px;
-  }
-  .catalogue-page .api-products .product-info {
-    min-height: 210px;
-    height: 210px;
-  }
-
   .category-nav-section .category-nav-grid {
     gap: 8px;
   }
@@ -2442,5 +2404,115 @@ h1, h2, h3 { color: var(--brand-navy); }
   .category-nav-section .category-nav-card .category-artwork {
     height: 104px;
     min-height: 104px;
+  }
+}
+
+@media (max-width: 430px) {
+  .catalogue-page .api-products {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    row-gap: 12px;
+  }
+  .catalogue-page .api-products .product-card {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+  }
+  .catalogue-page .api-products .product-image {
+    height: clamp(138px, 38vw, 158px);
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+  .catalogue-page .api-products .product-image > img {
+    width: 100%;
+    height: 100%;
+    padding: 9px;
+    object-fit: contain;
+  }
+  .catalogue-page .api-products .product-info {
+    display: grid;
+    width: 100%;
+    min-height: 188px;
+    height: auto;
+    grid-template-rows: auto auto 1fr;
+    align-content: start;
+    gap: 5px;
+    padding: 12px 11px 13px;
+  }
+  .catalogue-page .api-products .product-info-copy {
+    width: 100%;
+    min-width: 0;
+  }
+  .catalogue-page .api-products .product-info-copy .verified-badge {
+    min-height: 25px;
+    margin: 0 0 6px;
+    padding: 5px 7px;
+    font-size: 9px;
+  }
+  .catalogue-page .api-products .product-info h3 {
+    margin: 0 0 3px;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+  .catalogue-page .api-products .product-info p {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 9.5px;
+    line-height: 1.35;
+  }
+  .catalogue-page .api-products .product-detail-cta {
+    order: 2;
+    width: 100%;
+    min-height: 25px;
+    justify-content: flex-start;
+    gap: 5px;
+    align-self: start;
+    padding: 2px 0;
+    border-top: 0;
+    white-space: nowrap;
+    font-size: 11px;
+  }
+  .catalogue-page .api-products .product-detail-cta svg {
+    flex: 0 0 15px;
+  }
+  .catalogue-page .api-products .product-pricing {
+    order: 3;
+    width: 100%;
+    max-width: 100%;
+    align-self: end;
+    justify-items: start;
+    gap: 3px;
+  }
+  .catalogue-page .api-products .product-pricing strong {
+    font-size: 15px;
+  }
+  .catalogue-page .api-products .product-stock {
+    text-align: left;
+  }
+  .catalogue-page .api-products .product-card:hover,
+  .catalogue-page .api-products .product-card:hover .product-image img {
+    transform: none;
+  }
+}
+
+@media (max-width: 350px) {
+  .catalogue-page .api-products {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .catalogue-page .api-products .product-image {
+    height: 190px;
+  }
+  .catalogue-page .api-products .product-info {
+    min-height: 174px;
+  }
+  .catalogue-page .api-products .product-info h3 {
+    font-size: 14px;
+  }
+  .catalogue-page .api-products .product-info p {
+    font-size: 11px;
+  }
+  .catalogue-page .api-products .product-detail-cta {
+    font-size: 12px;
   }
 }
