@@ -255,7 +255,64 @@ function BackToTop() {
   return visible ? <button className="back-to-top" type="button" aria-label="Back to top" onClick={() => window.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}><ArrowUp size={19} /></button> : null;
 }
 
-function Layout({ children }: { children: React.ReactNode }) { return <><Header /><main>{children}</main><Footer /><BackToTop /></>; }
+function useVisualCardReveal() {
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const selector = [
+      ".category-card",
+      ".category-nav-card",
+      ".product-card",
+      ".deal-product-art",
+      ".budget-card",
+      ".brand-discovery-card",
+      ".home-promo-card",
+      ".best-selling-card",
+    ].join(",");
+
+    const observed = new WeakSet<Element>();
+    let observer: IntersectionObserver | null = null;
+
+    const revealCards = () => {
+      document.querySelectorAll(selector).forEach((card, index) => {
+        if (card.closest(".hero")) return;
+        if (!(card instanceof HTMLElement)) return;
+        if (!card.classList.contains("visual-card-reveal")) {
+          card.classList.add("visual-card-reveal");
+          const siblings = card.parentElement?.querySelectorAll(selector);
+          const siblingIndex = siblings ? Array.from(siblings).indexOf(card) : index;
+          card.style.setProperty("--reveal-delay", `${Math.min(Math.max(siblingIndex, 0), 5) * 70}ms`);
+        }
+        if (!observed.has(card) && observer) {
+          observed.add(card);
+          observer.observe(card);
+        }
+      });
+    };
+
+    observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-revealed");
+        observer?.unobserve(entry.target);
+      });
+    }, { threshold: 0.12, rootMargin: "0px 0px -4% 0px" });
+
+    revealCards();
+    const mutationObserver = new MutationObserver(revealCards);
+    mutationObserver.observe(document.body, { childList: true, subtree: true });
+
+    return () => {
+      mutationObserver.disconnect();
+      observer?.disconnect();
+    };
+  }, []);
+}
+
+function Layout({ children }: { children: React.ReactNode }) {
+  useVisualCardReveal();
+  return <><Header /><main>{children}</main><Footer /><BackToTop /></>;
+}
 function SectionHeading({ eyebrow, title, text, action, id }: { eyebrow: string; title: string; text?: string; action?: React.ReactNode; id?: string }) {
   return <div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2 id={id}>{title}</h2>{text && <p className="section-lead">{text}</p>}</div>{action}</div>;
 }
@@ -756,6 +813,7 @@ function BrandLogoBanner() {
 function Home() {
   return <>
     <HomeHero />
+    <BrandLogoBanner />
     <ShopByCategory />
     <ServiceHighlights />
     <HomeProductShelves />

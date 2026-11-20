@@ -81,7 +81,7 @@ h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.1; letter-spacing: -.06em
 .section-lead { max-width: 500px; color: #66746d; line-height: 1.65; margin-bottom: 0; }
 .shop-category-section { background: #f3f5ef; }
 .category-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
-.category-card { min-width: 0; color: #12372a; border: 1px solid #e0e7df; border-radius: 12px; padding: 10px 10px 19px; background: #fbfcf8; box-shadow: 0 10px 26px #17382a0d; transition: transform .35s ease, box-shadow .35s ease, border-color .35s ease; animation: category-enter .6s both; }
+.category-card { min-width: 0; color: #12372a; border: 1px solid #e0e7df; border-radius: 12px; padding: 10px 10px 19px; background: #fbfcf8; box-shadow: 0 10px 26px #17382a0d; transition: transform .35s ease, box-shadow .35s ease, border-color .35s ease; }
 .category-card:nth-child(2) { animation-delay: .08s; }
 .category-card:nth-child(3) { animation-delay: .16s; }
 .category-card:hover { border-color: #b7cfbd; box-shadow: 0 16px 34px #17382a1a; transform: translateY(-5px); }
@@ -90,7 +90,6 @@ h2 { font-size: clamp(30px, 4vw, 46px); line-height: 1.1; letter-spacing: -.06em
 .category-card:first-child .category-card-image img { object-position: 50% 45%; }
 .category-card:hover .category-card-image img { transform: scale(1.05); }
 .category-card h3 { margin: 17px 0 0; font-size: 18px; letter-spacing: -.03em; }
-@keyframes category-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .product-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
 .product-card { min-width: 0; }
 .product-image { height: 320px; position: relative; overflow: hidden; background: #e9ece7; }
@@ -1887,7 +1886,7 @@ h1, h2, h3 { color: var(--brand-navy); }
 .brand-logo-track {
   display: flex;
   width: max-content;
-  animation: brand-logo-scroll 34s linear infinite;
+  animation: brand-logo-scroll 26s linear infinite;
   will-change: transform;
 }
 .brand-logo-group {
@@ -2273,4 +2272,71 @@ h1, h2, h3 { color: var(--brand-navy); }
 
 @media (max-width: 380px) {
   .budget-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Premium card reveal: applied only to visual cards, never to card copy. */
+.visual-card-reveal {
+  opacity: 0;
+  scale: .90;
+  transition:
+    opacity .58s cubic-bezier(.2, .65, .25, 1),
+    scale .58s cubic-bezier(.2, .65, .25, 1),
+    box-shadow .24s ease,
+    border-color .24s ease;
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, scale;
+}
+.visual-card-reveal.is-revealed {
+  opacity: 1;
+  scale: 1;
+  will-change: auto;
+}
+.visual-card-reveal.is-revealed.deal-product-art {
+  scale: 1;
+}
+
+.home-promotions-section .explore-promo,
+.home-promotions-section .trade-in-promo,
+.best-selling-card {
+  position: relative;
+  isolation: isolate;
+  background-image:
+    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 28%),
+    radial-gradient(circle at 58% 82%, rgba(193, 220, 255, .26), transparent 34%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .78),
+    0 12px 30px rgba(21, 43, 80, .10);
+}
+.home-promotions-section .explore-promo {
+  background-color: #edf4ff;
+  background-image:
+    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 28%),
+    radial-gradient(circle at 62% 82%, rgba(175, 207, 255, .34), transparent 38%);
+}
+.home-promotions-section .trade-in-promo {
+  background-color: #eff4f8;
+  background-image:
+    radial-gradient(circle at 80% 16%, rgba(255, 255, 255, .96), transparent 29%),
+    radial-gradient(circle at 58% 78%, rgba(177, 214, 199, .28), transparent 38%);
+}
+.best-selling-card--android {
+  background-color: #eff9ed;
+  background-image:
+    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .92), transparent 31%),
+    radial-gradient(circle at 62% 78%, rgba(190, 228, 183, .38), transparent 40%);
+}
+.best-selling-card--apple {
+  background-color: #f6f7f8;
+  background-image:
+    radial-gradient(circle at 82% 18%, rgba(255, 255, 255, .96), transparent 31%),
+    radial-gradient(circle at 62% 78%, rgba(181, 203, 233, .30), transparent 40%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visual-card-reveal,
+  .visual-card-reveal.is-revealed {
+    opacity: 1;
+    scale: 1;
+    transition: none;
+  }
 }
