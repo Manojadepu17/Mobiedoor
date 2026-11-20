@@ -517,12 +517,14 @@ function HomeProductShelves() {
     <DealsOfTheDay products={[]} isLoading />
     <HomePromotions />
     <HomeBrandOffers />
+    <ShopByBudget />
     <ProductShelfLoading id="new-arrivals" title="Recently added" />
   </>;
   if (isError || !data) return <>
     <DealsOfTheDay products={[]} isError />
     <HomePromotions />
     <HomeBrandOffers />
+    <ShopByBudget />
     <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus state="error" /></div></section>
   </>;
 
