@@ -2260,6 +2260,17 @@ h1, h2, h3 { color: var(--brand-navy); }
 }
 
 @media (max-width: 600px) {
+  .budget-section { padding-top: 12px; }
+  .budget-grid { gap: 10px; }
+  .budget-card { height: 166px; padding: 16px 14px; border-radius: 14px; }
+  .budget-card-copy strong { font-size: 14px; line-height: 1.15; }
+  .budget-card-copy small { margin-top: 9px; font-size: 13px; }
+  .budget-card-copy b { font-size: clamp(20px, 6vw, 26px); }
+  .budget-card-images { width: 63%; height: 70%; }
+  .budget-card-arrow { bottom: 13px; left: 14px; width: 30px; height: 30px; }
+}
+
+@media (max-width: 760px) {
   .organization-banner {
     min-height: 198px;
     grid-template-columns: 1fr 1fr;
@@ -2274,14 +2285,6 @@ h1, h2, h3 { color: var(--brand-navy); }
   .organization-banner-art--left { grid-column: 1; grid-row: 2; }
   .organization-banner-art--right { grid-column: 2; grid-row: 2; }
   .organization-banner-cta { grid-column: 1 / -1; grid-row: 3; justify-self: center; min-height: 36px; padding: 0 14px; font-size: 11px; }
-  .budget-section { padding-top: 12px; }
-  .budget-grid { gap: 10px; }
-  .budget-card { height: 166px; padding: 16px 14px; border-radius: 14px; }
-  .budget-card-copy strong { font-size: 14px; line-height: 1.15; }
-  .budget-card-copy small { margin-top: 9px; font-size: 13px; }
-  .budget-card-copy b { font-size: clamp(20px, 6vw, 26px); }
-  .budget-card-images { width: 63%; height: 70%; }
-  .budget-card-arrow { bottom: 13px; left: 14px; width: 30px; height: 30px; }
 }
 
 @media (max-width: 380px) {

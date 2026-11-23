@@ -5,6 +5,8 @@ type CatalogueStatusProps = {
   state: "loading" | "error" | "empty";
   hasFilters?: boolean;
   onClear?: () => void;
+  errorDetails?: string;
+  onRetry?: () => void;
 };
 
 export function CataloguePagination({ page, totalPages, onPrevious, onNext }: {
@@ -29,12 +31,12 @@ export function CatalogueSkeletonGrid({ count = 8 }: { count?: number }) {
   </div>;
 }
 
-export function CatalogueStatus({ state, hasFilters = false, onClear }: CatalogueStatusProps) {
+export function CatalogueStatus({ state, hasFilters = false, onClear, errorDetails, onRetry }: CatalogueStatusProps) {
   if (state === "loading") {
     return <div className="catalogue-state" role="status"><Sparkles size={25} /><h2>Loading the collection</h2><p>Checking the latest verified devices.</p></div>;
   }
   if (state === "error") {
-    return <div className="catalogue-state pending" role="alert"><CircleHelp size={27} /><h2>The live collection is currently unavailable.</h2><p>We could not load the verified collection. Please try again or ask our team about availability.</p><Link className="button text" to="/contact">Ask about availability</Link></div>;
+    return <div className="catalogue-state pending" role="alert"><CircleHelp size={27} /><h2>The live collection is currently unavailable.</h2><p>We could not load the verified collection. Please try again or ask our team about availability.{errorDetails && <> Last request error: {errorDetails}</>}</p>{onRetry && <button className="button text" type="button" onClick={onRetry}>Try again</button>}<Link className="button text" to="/contact">Ask about availability</Link></div>;
   }
   return <div className="catalogue-state" role="status"><Search size={25} /><h2>{hasFilters ? "No devices match these filters." : "No published devices yet."}</h2><p>{hasFilters ? "Try a different brand, model or category." : "The live catalogue is being prepared. Check back soon or ask our team about availability."}</p>{hasFilters && onClear && <button type="button" className="button text" onClick={onClear}>Clear filters <X size={16} /></button>}</div>;
 }

@@ -55,6 +55,25 @@ class ApiError extends Error {
   }
 }
 
+function getApiErrorStatus(error: unknown) {
+  if (error instanceof ApiError) return error.status;
+  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
+    ? error.status
+    : undefined;
+}
+
+function describeApiError(error: unknown) {
+  const status = getApiErrorStatus(error);
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+        ? error.message
+        : "No additional request details were provided.";
+  return `${status === undefined ? "" : `HTTP ${status}: `}${message}`;
+}
+
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEnvelope<T>> {
   const isFormData = options?.body instanceof FormData;
   const response = await fetch(apiRequestUrl(path), {
@@ -63,27 +82,55 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEn
     headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options?.headers ?? {}) },
   });
   if (response.status === 204) return { data: null as T };
-  const body = await response.json() as ApiEnvelope<T> & { error?: { message?: string } };
+  let body: ApiEnvelope<T> & { error?: { message?: string } };
+  try {
+    body = await response.json() as ApiEnvelope<T> & { error?: { message?: string } };
+  } catch (error) {
+    if (options?.signal?.aborted) throw error;
+    if (!response.ok) throw new ApiError(`The API request failed with HTTP ${response.status}.`, response.status);
+    throw new ApiError("The API returned an invalid response.", response.status);
+  }
   if (!response.ok) throw new ApiError(body.error?.message ?? "The request could not be completed.", response.status);
   return body;
 }
 
-async function fetchAllCatalogueProducts(filters: ShopFilters) {
-  const query = productsQuery(filters);
-  query.set("limit", "50");
-  const firstPage = await apiRequest<Product[]>(`/products?${query}`);
-  const totalPages = firstPage.meta?.totalPages ?? 1;
-  const additionalPages = await Promise.all(
-    Array.from({ length: Math.max(0, totalPages - 1) }, async (_, index) => {
-      const pageQuery = new URLSearchParams(query);
-      pageQuery.set("page", String(index + 2));
-      return apiRequest<Product[]>(`/products?${pageQuery}`);
-    }),
-  );
-  return {
-    ...firstPage,
-    data: [ ...firstPage.data, ...additionalPages.flatMap(page => page.data) ],
-  };
+class ApiTimeoutError extends Error {
+  constructor() {
+    super("The catalogue request timed out.");
+    this.name = "ApiTimeoutError";
+  }
+}
+
+async function fetchAllCatalogueProducts(filters: ShopFilters, signal?: AbortSignal) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 30_000);
+  const abortRequest = () => controller.abort();
+  if (signal?.aborted) abortRequest();
+  else signal?.addEventListener("abort", abortRequest, { once: true });
+
+  try {
+    const query = productsQuery(filters);
+    query.set("limit", "50");
+    const firstPage = await apiRequest<Product[]>(`/products?${query}`, { signal: controller.signal });
+    const totalPages = firstPage.meta?.totalPages ?? 1;
+    const additionalPages = await Promise.all(
+      Array.from({ length: Math.max(0, totalPages - 1) }, async (_, index) => {
+        const pageQuery = new URLSearchParams(query);
+        pageQuery.set("page", String(index + 2));
+        return apiRequest<Product[]>(`/products?${pageQuery}`, { signal: controller.signal });
+      }),
+    );
+    return {
+      ...firstPage,
+      data: [ ...firstPage.data, ...additionalPages.flatMap(page => page.data) ],
+    };
+  } catch (error) {
+    if (controller.signal.aborted && !signal?.aborted) throw new ApiTimeoutError();
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abortRequest);
+  }
 }
 
 function createCroppedImage(source: string, crop: Area | undefined, rotation: number) {
@@ -137,10 +184,16 @@ function FallbackImage({ src, alt, className = "", loading = "lazy", style, fetc
   style?: React.CSSProperties;
   fetchPriority?: "high" | "low" | "auto";
 }) {
-  const [failed, setFailed] = useState(!src);
+  const [failedSrc, setFailedSrc] = useState<string>();
+  const [imageRetry, setImageRetry] = useState<{ src: string; attempt: number }>();
+  const retryAttempt = imageRetry && imageRetry.src === src ? imageRetry.attempt : 0;
+  const failed = !src || failedSrc === src;
   return failed
     ? <div className={`image-fallback ${className}`} style={style} role="img" aria-label={alt}><PackageCheck size={28} /><span>Product image unavailable</span></div>
-    : <img className={className} src={src} alt={alt} loading={loading} {...{ fetchpriority: fetchPriority }} decoding="async" style={style} onError={() => setFailed(true)} />;
+    : <img key={`${src}-${retryAttempt}`} className={className} src={src} alt={alt} loading={loading} {...{ fetchpriority: fetchPriority }} decoding="async" style={style} onError={() => {
+      if (retryAttempt === 0) setImageRetry({ src, attempt: 1 });
+      else setFailedSrc(src);
+    }} />;
 }
 
 function RefurbishmentVisual({ className = "" }: { className?: string }) {
@@ -508,24 +561,33 @@ function BrandDiscovery({ products }: { products: Product[] }) {
 }
 
 function HomeProductShelves() {
-  const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]>>({
+  const { data, isLoading, isError, error, refetch } = useQuery<ApiEnvelope<Product[]>>({
     queryKey: ["home-catalogue"],
     queryFn: () => fetchAllCatalogueProducts({ search: "", category: ALL_DEVICES_CATEGORY, sort: "Newest" }),
-    retry: false,
+    retry: (failureCount, requestError) => {
+      if (failureCount >= 2) return false;
+      const status = getApiErrorStatus(requestError);
+      if (status !== undefined) return status === 408 || status === 429 || status >= 500;
+      return requestError instanceof TypeError || requestError instanceof ApiTimeoutError;
+    },
+    retryDelay: attempt => Math.min(750 * 2 ** attempt, 3_000),
+    staleTime: 60_000,
   });
   if (isLoading) return <>
     <DealsOfTheDay products={[]} isLoading />
     <HomePromotions />
     <HomeBrandOffers />
-    <ShopByBudget />
     <ProductShelfLoading id="new-arrivals" title="Recently added" />
   </>;
   if (isError || !data) return <>
     <DealsOfTheDay products={[]} isError />
     <HomePromotions />
     <HomeBrandOffers />
-    <ShopByBudget />
-    <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus state="error" /></div></section>
+    <section className="section home-shelf featured-section"><div className="container"><CatalogueStatus
+      state="error"
+      errorDetails={describeApiError(error)}
+      onRetry={() => void refetch()}
+    /></div></section>
   </>;
 
   const products = data.data;
@@ -555,8 +617,6 @@ function HomeProductShelves() {
       viewAllTo={categoryHref(category.value, catalogueCategories)}
       key={category.value}
     />)}
-    <OrganizationBanner />
-    <ShopByBudget />
     <BrandDiscovery products={products} />
   </>;
 }
@@ -820,6 +880,8 @@ function Home() {
     <ShopByCategory />
     <ServiceHighlights />
     <HomeProductShelves />
+    <OrganizationBanner />
+    <ShopByBudget />
     <Testimonials />
     <HomeFaq />
     <BrandLogoBanner />

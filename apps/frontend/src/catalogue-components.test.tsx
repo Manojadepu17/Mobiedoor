@@ -31,6 +31,13 @@ describe("catalogue loading, error, and empty states", () => {
     expect(markup).toContain('href="/contact"');
   });
 
+  it("reports the last catalogue failure and offers a retry", () => {
+    const markup = renderStatus({ state: "error", errorDetails: "HTTP 503: Service unavailable.", onRetry: () => {} });
+    expect(markup).toContain("Last request error: HTTP 503: Service unavailable.");
+    expect(markup).toContain('type="button"');
+    expect(markup).toContain("Try again");
+  });
+
   it("distinguishes an empty catalogue from empty filter results", () => {
     expect(renderStatus({ state: "empty" })).toContain("No published devices yet.");
     const filtered = renderStatus({ state: "empty", hasFilters: true, onClear: () => {} });
