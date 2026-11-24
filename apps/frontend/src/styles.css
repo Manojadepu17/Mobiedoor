@@ -1181,7 +1181,7 @@ h1, h2, h3 { color: var(--brand-navy); }
   background: transparent;
   box-shadow: none;
 }
-.hero-carousel .hero-image .hero-product-image { padding: 0; object-fit: cover; }
+.hero-carousel .hero-image .hero-product-image { padding: 0; object-fit: contain; }
 .hero-carousel .hero-carousel-controls { right: -12px; bottom: 3px; gap: 5px; }
 .hero-carousel .hero-carousel-controls button { width: 30px; height: 30px; border: 0; background: #071733aa; }
 .hero-carousel .hero-carousel-controls .hero-carousel-dot { width: 23px; height: 30px; background: transparent; }
@@ -1794,7 +1794,7 @@ h1, h2, h3 { color: var(--brand-navy); }
 .hero-carousel .hero-proof { color: #e0eafa; }
 .hero-carousel .hero-visual { min-height: 280px; }
 .hero-carousel .hero-image { width: 100%; height: 280px; border-radius: 0; background: transparent; box-shadow: none; }
-.hero-carousel .hero-image .hero-product-image { object-fit: cover; filter: drop-shadow(0 22px 22px #0008); }
+.hero-carousel .hero-image .hero-product-image { object-fit: contain; filter: drop-shadow(0 22px 22px #0008); }
 .hero-carousel-controls { bottom: 3px; }
 .category-nav-section { padding: 16px 0 14px; background: #f1f6ff; }
 .category-nav-section .container { width: min(844px, calc(100% - 48px)); }
@@ -2035,8 +2035,11 @@ h1, h2, h3 { color: var(--brand-navy); }
 }
 .category-nav-card .category-artwork { height: 122px; }
 .category-nav-card .category-artwork .category-photo {
+  display: block;
   width: 100%;
   height: 100%;
+  margin-inline: auto;
+  background: transparent;
   object-fit: contain;
   object-position: center;
 }
@@ -2388,15 +2391,21 @@ h1, h2, h3 { color: var(--brand-navy); }
     padding: 8px;
   }
   .category-nav-section .category-nav-card .category-artwork {
+    display: grid;
     height: 112px;
     min-height: 112px;
+    place-items: center;
+    background: transparent;
   }
   .category-nav-section .category-nav-card .category-artwork .category-photo {
+    display: block;
     width: 100%;
     height: 100%;
     max-width: 100%;
     max-height: 100%;
+    margin-inline: auto;
     padding: 4px;
+    background: transparent;
     object-fit: contain;
     object-position: center;
   }

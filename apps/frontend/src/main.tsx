@@ -246,11 +246,12 @@ function categoryHref(value: string, categories: string[]) {
 function CategoryCard({ category, categories }: { category: typeof shopCategories[number]; categories: string[] }) {
   const artwork = CATEGORY_IMAGES[category.value];
   return <Link className="category-card category-nav-card" to={categoryHref(category.value, categories)} aria-label={`Shop ${category.label}`}>
-    <span className="category-artwork"><FallbackImage
+    <span className="category-artwork"><img
       className="category-photo"
       src={artwork.src}
       alt={artwork.alt}
       loading="lazy"
+      decoding="async"
       style={{ objectPosition: artwork.objectPosition }}
     /></span>
     <h3>{category.label}</h3>
@@ -778,12 +779,13 @@ function HomeHero() {
               <div className="hero-proof"><span><CircleCheck size={16} /> Live listings, lower prices</span></div>
             </div>
             <div className="hero-visual">
-              <div className="hero-image"><FallbackImage
+              <div className="hero-image"><img
                 className="hero-product-image"
                 loading={index === 0 ? "eager" : "lazy"}
                 fetchPriority={index === activeSlide ? "high" : "auto"}
                 src={slide.image.src}
                 alt={slide.image.alt}
+                decoding="async"
                 style={{ objectPosition: slide.image.objectPosition }}
               /></div>
             </div>
