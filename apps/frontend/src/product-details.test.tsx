@@ -18,7 +18,10 @@ const product: ProductDetailsData = {
   condition: "EXCELLENT",
   stockQuantity: 3,
   warrantyMonths: 6,
-  imageUrls: ["https://example.com/front.jpg", "https://example.com/back.jpg"],
+  imageUrls: [
+    "https://res.cloudinary.com/demo/image/upload/v1/mobiedoor/products/front.jpg",
+    "https://res.cloudinary.com/demo/image/upload/v1/mobiedoor/products/back.jpg",
+  ],
   specifications: { Display: "6.1-inch OLED", Storage: "128 GB" },
 };
 
@@ -43,8 +46,8 @@ describe("product details presentation", () => {
 
   it("renders all image thumbnails and marks the initial image selected", () => {
     const markup = renderProductDetails(product);
-    expect(markup).toContain('src="https://example.com/front.jpg"');
-    expect(markup).toContain('src="https://example.com/back.jpg"');
+    expect(markup).toContain("mobiedoor/products/front.jpg");
+    expect(markup).toContain("mobiedoor/products/back.jpg");
     expect(markup).toContain('aria-label="Show image 1 of 2 for Refurbished Phone"');
     expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain('aria-pressed="false"');

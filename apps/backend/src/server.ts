@@ -152,9 +152,18 @@ app.use((request, response, next) => {
   next();
 });
 
-const publicMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false, message: { error: { code: "RATE_LIMITED", message: "Too many submissions. Please try again later." } } });
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
-const setupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-7", legacyHeaders: false });
+const publicMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false, skipSuccessfulRequests: true, message: { error: { code: "RATE_LIMITED", message: "Too many submissions. Please try again later." } } });
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: (_request, response) => response.status(429).json({
+    error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Please wait before trying again." },
+  }),
+});
+const setupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-7", legacyHeaders: false, skipSuccessfulRequests: true });
 const adminMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 120, standardHeaders: "draft-7", legacyHeaders: false, message: { error: { code: "RATE_LIMITED", message: "Too many admin changes. Please try again later." } } });
 const productImageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
 
@@ -168,6 +177,7 @@ app.get("/health", async (_request, response, next) => {
 
 app.get("/products", async (request, response, next) => {
   try {
+    response.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
     const query = z.object({
       search: z.string().trim().max(100).optional(), category: z.string().trim().max(80).optional(),
       sort: z.enum(["featured", "price_asc", "price_desc", "newest"]).default("featured"),
@@ -182,6 +192,7 @@ app.get("/products", async (request, response, next) => {
 
 app.get("/products/:id", async (request, response, next) => {
   try {
+    response.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
     const productId = getParam(request, "id");
     const product = await prisma.product.findFirst({ where: { isPublished: true, OR: [{ id: productId }, { slug: productId }] }, select: publicProductSelect });
     if (!product) { response.status(404).json({ error: { code: "NOT_FOUND", message: "Product not found." } }); return; }
@@ -191,6 +202,7 @@ app.get("/products/:id", async (request, response, next) => {
 
 app.get("/categories", async (_request, response, next) => {
   try {
+    response.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
     const [managed, legacy] = await prisma.$transaction([
       prisma.category.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { name: true } }),
       prisma.product.findMany({ where: { isPublished: true }, distinct: ["category"], orderBy: { category: "asc" }, select: { category: true } }),

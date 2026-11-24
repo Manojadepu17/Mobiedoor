@@ -20,9 +20,21 @@ import { ProductDetailContent } from "./product-details";
 import { CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
 import { VerifiedBadge } from "./verified-badge";
 import { CATEGORY_IMAGES, HERO_IMAGES } from "./config/homepageImages";
+import { optimizedProductImageUrl, PRODUCT_IMAGE_FALLBACK } from "./image-url";
 import "./styles.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      staleTime: 30_000,
+    },
+    mutations: {
+      retry: false,
+    },
+  },
+});
 const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
 if (import.meta.env.PROD && configuredApiUrl !== "/api") {
   throw new Error('VITE_API_URL must be exactly "/api" in production.');
@@ -45,11 +57,11 @@ type Product = {
   stockQuantity: number; warrantyMonths?: number; imageUrls: string[]; specifications?: unknown; availability?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK"; isPublished?: boolean;
 };
 
-type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number; totalPages: number }; message?: string };
+type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number; totalPages: number }; message?: string; error?: { code?: string; message?: string } };
 type AuthUser = { id: string; name: string; email: string; role: "FOUNDER" | "ADMIN" | "STAFF" | "CUSTOMER" };
 
 class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly retryAfterSeconds?: number) {
     super(message);
     this.name = "ApiError";
   }
@@ -76,11 +88,26 @@ function describeApiError(error: unknown) {
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEnvelope<T>> {
   const isFormData = options?.body instanceof FormData;
-  const response = await fetch(apiRequestUrl(path), {
+  const requestUrl = apiRequestUrl(path);
+  const method = (options?.method ?? "GET").toUpperCase();
+  const requestKey = `${method}:${requestUrl}:${isFormData ? "form" : typeof options?.body === "string" ? options.body : ""}`;
+  const sharedGetRequests = apiRequest as typeof apiRequest & { getRequests?: Map<string, Promise<Response>> };
+  sharedGetRequests.getRequests ??= new Map();
+  let response: Response;
+  if (method === "GET" && sharedGetRequests.getRequests.has(requestKey)) {
+    response = (await sharedGetRequests.getRequests.get(requestKey)!).clone();
+  } else {
+    const request = fetch(requestUrl, {
     ...options,
     credentials: "include",
     headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options?.headers ?? {}) },
-  });
+    });
+    if (method === "GET") {
+      sharedGetRequests.getRequests.set(requestKey, request);
+      void request.finally(() => sharedGetRequests.getRequests?.delete(requestKey)).catch(() => undefined);
+    }
+    response = await request;
+  }
   if (response.status === 204) return { data: null as T };
   let body: ApiEnvelope<T> & { error?: { message?: string } };
   try {
@@ -90,7 +117,16 @@ async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEn
     if (!response.ok) throw new ApiError(`The API request failed with HTTP ${response.status}.`, response.status);
     throw new ApiError("The API returned an invalid response.", response.status);
   }
-  if (!response.ok) throw new ApiError(body.error?.message ?? "The request could not be completed.", response.status);
+  if (!response.ok) {
+    const retryAfterHeader = response.headers.get("Retry-After");
+    const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : undefined;
+    throw new ApiError(
+      body.error?.message ?? "The request could not be completed.",
+      response.status,
+      body.error?.code,
+      Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined,
+    );
+  }
   return body;
 }
 
@@ -184,16 +220,18 @@ function FallbackImage({ src, alt, className = "", loading = "lazy", style, fetc
   style?: React.CSSProperties;
   fetchPriority?: "high" | "low" | "auto";
 }) {
+  const optimizedSrc = optimizedProductImageUrl(src);
   const [failedSrc, setFailedSrc] = useState<string>();
-  const [imageRetry, setImageRetry] = useState<{ src: string; attempt: number }>();
-  const retryAttempt = imageRetry && imageRetry.src === src ? imageRetry.attempt : 0;
-  const failed = !src || failedSrc === src;
-  return failed
-    ? <div className={`image-fallback ${className}`} style={style} role="img" aria-label={alt}><PackageCheck size={28} /><span>Product image unavailable</span></div>
-    : <img key={`${src}-${retryAttempt}`} className={className} src={src} alt={alt} loading={loading} {...{ fetchpriority: fetchPriority }} decoding="async" style={style} onError={() => {
-      if (retryAttempt === 0) setImageRetry({ src, attempt: 1 });
-      else setFailedSrc(src);
-    }} />;
+  const [usedFallback, setUsedFallback] = useState(false);
+  const fallbackDueToMissingSource = !optimizedSrc;
+  const renderedSrc = usedFallback || fallbackDueToMissingSource ? PRODUCT_IMAGE_FALLBACK : failedSrc === src ? "" : optimizedSrc;
+  if (!renderedSrc) {
+    return <div className={`image-fallback ${className}`} style={style} role="img" aria-label={alt}><PackageCheck size={28} /><span>Product image unavailable</span></div>;
+  }
+  return <img className={className} src={renderedSrc} alt={alt} loading={loading} {...{ fetchpriority: fetchPriority }} decoding="async" style={style} onError={() => {
+    if (!usedFallback && !fallbackDueToMissingSource) setUsedFallback(true);
+    else setFailedSrc(src);
+  }} />;
 }
 
 function RefurbishmentVisual({ className = "" }: { className?: string }) {
@@ -567,7 +605,7 @@ function HomeProductShelves() {
     retry: (failureCount, requestError) => {
       if (failureCount >= 2) return false;
       const status = getApiErrorStatus(requestError);
-      if (status !== undefined) return status === 408 || status === 429 || status >= 500;
+      if (status !== undefined) return status === 408 || status >= 500;
       return requestError instanceof TypeError || requestError instanceof ApiTimeoutError;
     },
     retryDelay: attempt => Math.min(750 * 2 ** attempt, 3_000),
@@ -1061,8 +1099,24 @@ function Login() {
   const navigate = useNavigate();
   const sessionMessage = (location.state as { message?: string } | null)?.message;
   const setupStatus = useQuery<{ available: boolean }>({ queryKey: ["setup-status"], queryFn: () => apiRequest<{ available: boolean }>("/auth/setup-status").then(result => result.data), retry: false });
-  const mutation = useMutation({ mutationFn: (payload: { email: string; password: string }) => apiRequest<AuthUser>("/auth/login", { method: "POST", body: JSON.stringify(payload) }), onSuccess: ({ data }) => { queryClient.setQueryData(["auth-me"], data); navigate(data.role === "CUSTOMER" ? "/account" : data.role === "STAFF" ? "/staff" : "/admin", { replace: true }); }, onError: (loginError: Error) => setError(loginError.message) });
-  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">MobieDoor account</p><h1>Welcome back.</h1><p className="admin-muted">Sign in to continue to your MobieDoor account.</p>{sessionMessage && <p className="form-status" role="status">{sessionMessage}</p>}<form className="enquiry-form" onSubmit={event => { event.preventDefault(); setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as { email: string; password: string }; mutation.mutate(values); }}><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<div className="password-field"><input name="password" type={showPassword ? "text" : "password"} required minLength={10} autoComplete="current-password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button></div></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Signing in..." : "Sign in"}<ArrowRight size={16} /></button><p className="admin-muted">New to MobieDoor? <Link to="/register">Create a customer account</Link>.</p>{setupStatus.data?.available && <p className="admin-muted"><Link to="/setup">Initial administrator setup</Link></p>}{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
+  const mutation = useMutation({
+    mutationFn: (payload: { email: string; password: string }) => {
+      return apiRequest<AuthUser>("/auth/login", { method: "POST", body: JSON.stringify(payload) });
+    },
+    onSuccess: ({ data }) => { queryClient.setQueryData(["auth-me"], data); navigate(data.role === "CUSTOMER" ? "/account" : data.role === "STAFF" ? "/staff" : "/admin", { replace: true }); },
+    onError: (loginError: unknown) => {
+      const status = getApiErrorStatus(loginError);
+      if (status === 429) {
+        const retryAfter = loginError instanceof ApiError ? loginError.retryAfterSeconds : undefined;
+        setError(retryAfter ? `Too many sign-in attempts. Please wait ${retryAfter} seconds and try again.` : "Too many sign-in attempts. Please wait before trying again.");
+      } else if (status === 401) setError("Email or password is incorrect.");
+      else if (status === 403) setError(loginError instanceof Error ? loginError.message : "This account cannot sign in.");
+      else if (status === 500) setError("The sign-in service is temporarily unavailable. Please try again.");
+      else if (loginError instanceof TypeError) setError("Could not reach the sign-in service. Check your connection and try again.");
+      else setError(loginError instanceof Error ? loginError.message : "Sign-in could not be completed.");
+    },
+  });
+  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">MobieDoor account</p><h1>Welcome back.</h1><p className="admin-muted">Sign in to continue to your MobieDoor account.</p>{sessionMessage && <p className="form-status" role="status">{sessionMessage}</p>}<form className="enquiry-form" onSubmit={event => { event.preventDefault(); if (mutation.isPending) return; setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as { email: string; password: string }; mutation.mutate(values); }}><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<div className="password-field"><input name="password" type={showPassword ? "text" : "password"} required minLength={10} autoComplete="current-password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button></div></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Signing in..." : "Sign in"}<ArrowRight size={16} /></button><p className="admin-muted">New to MobieDoor? <Link to="/register">Create a customer account</Link>.</p>{setupStatus.data?.available && <p className="admin-muted"><Link to="/setup">Initial administrator setup</Link></p>}{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
 }
 
 function Register() {

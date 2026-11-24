@@ -3,6 +3,7 @@ import { ArrowRight, PackageCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { discountPercent, formatInr } from "./price";
 import { VerifiedBadge } from "./verified-badge";
+import { optimizedProductImageUrl, PRODUCT_IMAGE_FALLBACK } from "./image-url";
 
 export type ProductDetailsData = {
   name: string;
@@ -36,10 +37,12 @@ export function getSpecificationEntries(specifications: unknown): Array<[string,
 }
 
 function ProductImage({ src, alt }: { src?: string; alt: string }) {
-  const [failed, setFailed] = useState(!src);
+  const optimizedSrc = optimizedProductImageUrl(src);
+  const [usedFallback, setUsedFallback] = useState(false);
+  const [failed, setFailed] = useState(!optimizedSrc);
   return failed
     ? <div className="image-fallback" role="img" aria-label={alt}><PackageCheck size={28} /><span>Image unavailable</span></div>
-    : <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+    : <img src={usedFallback ? PRODUCT_IMAGE_FALLBACK : optimizedSrc} alt={alt} loading="lazy" decoding="async" onError={() => usedFallback ? setFailed(true) : setUsedFallback(true)} />;
 }
 
 export function ProductDetailContent({ product }: { product: ProductDetailsData }) {
