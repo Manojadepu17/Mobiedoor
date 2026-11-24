@@ -31,9 +31,15 @@ function parseTrustProxy(value: string | undefined): false | number {
 const databaseUrl = isProduction ? required("DATABASE_URL") : process.env.DATABASE_URL;
 const frontendUrl = isProduction ? required("FRONTEND_URL") : (process.env.FRONTEND_URL ?? "http://localhost:5173");
 const parsedFrontendUrl = new URL(frontendUrl);
+const frontendOrigins = new Set([parsedFrontendUrl.origin]);
 
 if (!["http:", "https:"].includes(parsedFrontendUrl.protocol)) {
   throw new Error("FRONTEND_URL must use http or https.");
+}
+if (!isProduction && ["localhost", "127.0.0.1"].includes(parsedFrontendUrl.hostname)) {
+  const loopbackAlias = new URL(parsedFrontendUrl);
+  loopbackAlias.hostname = parsedFrontendUrl.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  frontendOrigins.add(loopbackAlias.origin);
 }
 if (isProduction && parsedFrontendUrl.protocol !== "https:") {
   throw new Error("FRONTEND_URL must use HTTPS in production.");
@@ -46,6 +52,7 @@ export const config = {
   isProduction,
   databaseUrl,
   frontendUrl: parsedFrontendUrl.origin,
+  frontendOrigins: [...frontendOrigins],
   port: parsePort(process.env.PORT),
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
   initialSetupSecret: process.env.INITIAL_SETUP_SECRET?.trim(),

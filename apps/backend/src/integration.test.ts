@@ -45,6 +45,10 @@ if (!testDatabaseUrl) {
   };
   const productIds = fixtureIds.productIds;
   const enquiryIds = fixtureIds.enquiryIds;
+  const tradeEnquiryIds: string[] = [];
+  const partnershipEnquiryIds: string[] = [];
+  const categoryIds: string[] = [];
+  const settingKeys: string[] = [];
   let loginRequestId = 0;
 
   async function login(email: string) {
@@ -117,6 +121,12 @@ if (!testDatabaseUrl) {
       fixtureIds.sessionIds.push(...dependents.sessionIds);
       fixtureIds.activityLogIds.push(...dependents.activityLogIds);
       fixtureIds.inventoryAdjustmentIds.push(...dependents.inventoryAdjustmentIds);
+      await prisma.$transaction([
+        prisma.tradeInEnquiry.deleteMany({ where: { id: { in: tradeEnquiryIds } } }),
+        prisma.partnershipEnquiry.deleteMany({ where: { id: { in: partnershipEnquiryIds } } }),
+        prisma.category.deleteMany({ where: { id: { in: categoryIds } } }),
+        prisma.websiteSetting.deleteMany({ where: { key: { in: settingKeys } } }),
+      ]);
       await cleanupIntegrationTestFixtures(prisma, fixtureIds);
     } finally {
       await prisma.$disconnect();
@@ -424,6 +434,88 @@ if (!testDatabaseUrl) {
       const deactivateFounder = await agent.patch(`/admin/staff/${users.founder.id}`).send({ isActive: false });
       expect(deactivateFounder.status).toBe(403);
       expect((await prisma.user.findUniqueOrThrow({ where: { id: users.founder.id }, select: { isActive: true } })).isActive).toBe(true);
+      const deleteFounder = await agent.delete(`/admin/staff/${users.founder.id}`);
+      expect(deleteFounder.status).toBe(403);
+    });
+
+    it("deletes individual enquiries from each supported management queue", async () => {
+      const agent = await login(users.admin.email);
+      const contact = await request(app).post("/enquiries").send({ name: `${fixturePrefix} Delete contact`, email: `${fixturePrefix}-contact@example.test`, phoneNumber: "9999999999", message: "Delete this controlled contact enquiry." });
+      enquiryIds.push(contact.body.data.id);
+      const tradeIn = await request(app).post("/trade-in").send({ customerName: `${fixturePrefix} Delete trade`, email: `${fixturePrefix}-trade@example.test`, phoneNumber: "9999999999", city: "Pune", deviceBrand: "Test", deviceModel: "Device", deviceCondition: "Good" });
+      tradeEnquiryIds.push(tradeIn.body.data.id);
+      const partnership = await request(app).post("/partnerships").send({ companyName: `${fixturePrefix} Delete partner`, contactName: "Test contact", email: `${fixturePrefix}-partner@example.test`, phoneNumber: "9999999999", city: "Pune", message: "Delete this controlled partnership enquiry." });
+      partnershipEnquiryIds.push(partnership.body.data.id);
+      expect([contact.status, tradeIn.status, partnership.status]).toEqual([201, 201, 201]);
+
+      expect((await agent.delete(`/admin/enquiries/${contact.body.data.id}`)).status).toBe(204);
+      expect((await agent.delete(`/admin/trade-ins/${tradeIn.body.data.id}`)).status).toBe(204);
+      expect((await agent.delete(`/admin/partnerships/${partnership.body.data.id}`)).status).toBe(204);
+      expect(await prisma.contactEnquiry.findUnique({ where: { id: contact.body.data.id } })).toBeNull();
+      expect(await prisma.tradeInEnquiry.findUnique({ where: { id: tradeIn.body.data.id } })).toBeNull();
+      expect(await prisma.partnershipEnquiry.findUnique({ where: { id: partnership.body.data.id } })).toBeNull();
+      expect(await prisma.activityLog.count({ where: { entityId: { in: [contact.body.data.id, tradeIn.body.data.id, partnership.body.data.id] }, action: "DELETE" } })).toBe(3);
+    });
+
+    it("only removes the latest inventory adjustment and restores its stock effect", async () => {
+      const agent = await login(users.admin.email);
+      const productId = await createProduct(agent, "safe-history-delete");
+      const first = await agent.post(`/admin/products/${productId}/inventory`).send({ quantity: 3, reason: "First tracked adjustment" });
+      const second = await agent.post(`/admin/products/${productId}/inventory`).send({ quantity: 2, reason: "Latest tracked adjustment" });
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      const history = await prisma.inventoryAdjustment.findMany({ where: { productId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+
+      const olderDelete = await agent.delete(`/admin/inventory/history/${history[1].id}`);
+      expect(olderDelete.status).toBe(409);
+      expect(await prisma.inventoryAdjustment.count({ where: { productId } })).toBe(2);
+      const latestDelete = await agent.delete(`/admin/inventory/history/${history[0].id}`);
+      expect(latestDelete.status).toBe(204);
+      expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stockQuantity).toBe(5);
+      expect(await prisma.inventoryAdjustment.count({ where: { productId } })).toBe(1);
+    });
+
+    it("blocks deletion of referenced categories and deletes unused categories and content", async () => {
+      const agent = await login(users.admin.email);
+      const categoryName = `${fixturePrefix} protected`;
+      const category = await prisma.category.create({ data: { name: categoryName } });
+      categoryIds.push(category.id);
+      const productId = await createProduct(agent, "category-delete-guard");
+      await prisma.product.update({ where: { id: productId }, data: { category: categoryName } });
+      const protectedDelete = await agent.delete(`/admin/categories/${category.id}`);
+      expect(protectedDelete.status).toBe(409);
+      expect(protectedDelete.body.error.code).toBe("CATEGORY_IN_USE");
+
+      const unused = await prisma.category.create({ data: { name: `${fixturePrefix} unused` } });
+      categoryIds.push(unused.id);
+      expect((await agent.delete(`/admin/categories/${unused.id}`)).status).toBe(204);
+      expect(await prisma.category.findUnique({ where: { id: unused.id } })).toBeNull();
+
+      const key = `${fixturePrefix}-content`;
+      settingKeys.push(key);
+      await prisma.websiteSetting.create({ data: { key, value: "Controlled test content" } });
+      expect((await agent.delete(`/admin/settings/${key}`)).status).toBe(204);
+      expect(await prisma.websiteSetting.findUnique({ where: { key } })).toBeNull();
+    });
+
+    it("protects staff history and safely deletes an unreferenced staff account", async () => {
+      const agent = await login(users.founder.email);
+      const createStaff = async (suffix: string) => {
+        const created = await agent.post("/admin/staff").send({ name: `${fixturePrefix} ${suffix}`, email: `${fixturePrefix}-${suffix}@example.test`, password, role: "STAFF" });
+        expect(created.status).toBe(201);
+        fixtureIds.userIds.push(created.body.data.id);
+        return created.body.data.id as string;
+      };
+      const referencedId = await createStaff("referenced-delete");
+      await prisma.activityLog.create({ data: { userId: referencedId, action: "TEST", entity: "STAFF", entityId: referencedId } });
+      const blockedDelete = await agent.delete(`/admin/staff/${referencedId}`);
+      expect(blockedDelete.status).toBe(409);
+      expect(blockedDelete.body.error.code).toBe("STAFF_HAS_HISTORY");
+      expect(await prisma.user.findUnique({ where: { id: referencedId } })).not.toBeNull();
+
+      const unreferencedId = await createStaff("unreferenced-delete");
+      expect((await agent.delete(`/admin/staff/${unreferencedId}`)).status).toBe(204);
+      expect(await prisma.user.findUnique({ where: { id: unreferencedId } })).toBeNull();
     });
 
     it("prevents disabling the last active Founder or Admin", async () => {
@@ -440,6 +532,10 @@ if (!testDatabaseUrl) {
         expect(response.status).toBe(409);
         expect(response.body.error.code).toBe("LAST_ACTIVE_ADMIN");
         expect((await prisma.user.findUniqueOrThrow({ where: { id: users.lastAdmin.id }, select: { isActive: true } })).isActive).toBe(true);
+        const deletion = await agent.delete(`/admin/staff/${users.lastAdmin.id}`);
+        expect(deletion.status).toBe(409);
+        expect(deletion.body.error.code).toBe("LAST_ACTIVE_ADMIN");
+        expect(await prisma.user.findUnique({ where: { id: users.lastAdmin.id } })).not.toBeNull();
       } finally {
         await prisma.user.updateMany({
           where: { id: { in: [users.founder.id, users.admin.id] } },

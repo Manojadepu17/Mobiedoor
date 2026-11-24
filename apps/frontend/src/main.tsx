@@ -1090,12 +1090,41 @@ function Account() {
 }
 
 type AdminEnquiry = { id: string; status: string; adminNotes?: string | null; createdAt: string; name?: string; customerName?: string; companyName?: string; email?: string; message?: string; additionalDescription?: string | null };
+type DeleteTarget = { path: string; label: string };
+type DeleteNoticeState = { message: string; error: boolean };
+
+function DeleteConfirmation({ target, pending, onCancel, onConfirm }: { target: DeleteTarget | null; pending: boolean; onCancel: () => void; onConfirm: () => void }) {
+  if (!target) return null;
+  return <div className="delete-dialog-backdrop">
+    <section className="delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description">
+      <button className="delete-dialog-close" type="button" onClick={onCancel} disabled={pending} aria-label="Close confirmation"><X size={18} /></button>
+      <span className="delete-dialog-icon"><Trash2 size={20} /></span>
+      <h2 id="delete-dialog-title">Confirm deletion</h2>
+      <p id="delete-dialog-description">Delete <strong>{target.label}</strong>? This action cannot be undone.</p>
+      <div className="delete-dialog-actions">
+        <button type="button" className="delete-cancel" onClick={onCancel} disabled={pending} autoFocus>Cancel</button>
+        <button type="button" className="delete-confirm" onClick={onConfirm} disabled={pending}>{pending ? "Deleting..." : "Confirm Delete"}</button>
+      </div>
+    </section>
+  </div>;
+}
+
+function DeleteNotice({ notice }: { notice: DeleteNoticeState | null }) {
+  if (!notice) return null;
+  return <p className={`delete-notice${notice.error ? " is-error" : ""}`} role={notice.error ? "alert" : "status"}>
+    {notice.error ? <CircleHelp size={16} /> : <CircleCheck size={16} />} {notice.message}
+  </p>;
+}
+
 function AdminOperations({ canManage }: { canManage: boolean }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState("enquiries");
   const [status, setStatus] = useState("ALL");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [note, setNote] = useState<Record<string, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<DeleteNoticeState | null>(null);
   const endpoints = { enquiries: "/admin/enquiries", tradeins: "/admin/trade-ins", partnerships: "/admin/partnerships" };
   const [activityAction, setActivityAction] = useState("");
   const [activityUser, setActivityUser] = useState("");
@@ -1110,36 +1139,90 @@ function AdminOperations({ canManage }: { canManage: boolean }) {
   const staff = useQuery<Array<{ id: string; name: string; email: string; role: string; isActive: boolean }>>({ queryKey: ["admin-staff"], queryFn: () => apiRequest<Array<{ id: string; name: string; email: string; role: string; isActive: boolean }>>("/admin/staff").then(result => result.data), enabled: tab === "staff" && canManage });
   const categories = useQuery<Array<{ id: string; name: string; isActive: boolean }>>({ queryKey: ["admin-categories"], queryFn: () => apiRequest<Array<{ id: string; name: string; isActive: boolean }>>("/admin/categories").then(result => result.data), enabled: tab === "categories" });
   const settings = useQuery<Array<{ key: string; value: string }>>({ queryKey: ["admin-settings"], queryFn: () => apiRequest<Array<{ key: string; value: string }>>("/admin/settings").then(result => result.data), enabled: tab === "settings" && canManage });
+  const remove = useMutation({
+    mutationFn: (target: DeleteTarget) => apiRequest<null>(target.path, { method: "DELETE" }),
+    onSuccess: async (_result, target) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-list"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-inventory"] }),
+        queryClient.invalidateQueries({ queryKey: ["inventory-history"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-activity"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-staff"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-categories"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-settings"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-products"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["products"] }),
+      ]);
+      setDeleteNotice({ message: `${target.label} deleted successfully.`, error: false });
+      setDeleteTarget(null);
+    },
+    onError: (error: Error) => {
+      setDeleteNotice({ message: error.message || "The record could not be deleted.", error: true });
+      setDeleteTarget(null);
+    },
+  });
+  const requestDelete = (path: string, label: string) => {
+    setDeleteNotice(null);
+    setDeleteTarget({ path, label });
+  };
   const tabs = [["enquiries", "Contact"], ["tradeins", "Trade-in"], ["partnerships", "Partnerships"], ["inventory", "Inventory"], ["history", "Inventory history"], ["activity", "Activity"], ["categories", "Categories"], ...(canManage ? [["staff", "Staff"], ["settings", "Content"]] : [])];
-  return <section className="admin-panel operations-panel"><div className="admin-tabs">{tabs.map(([key, label]) => <button type="button" className={tab === key ? "active" : ""} onClick={() => { setTab(key); setPage(1); }} key={key}>{label}</button>)}</div>{(tab in endpoints) && <><div className="operations-toolbar"><input value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder="Search name, email or message" /><select value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}><option>ALL</option><option>NEW</option><option>IN_PROGRESS</option><option>RESOLVED</option><option>ARCHIVED</option></select></div><div className="admin-table">{list.isLoading ? <p className="admin-muted">Loading requests...</p> : list.data?.length ? list.data.map(item => <div className="admin-table-row enquiry-row" key={item.id}><span><strong>{item.name ?? item.customerName ?? item.companyName}</strong><small>{item.message ?? item.additionalDescription ?? "Request details available"}</small></span><span>{item.email ?? "—"}</span><span>{new Date(item.createdAt).toLocaleDateString("en-IN")}</span><select value={item.status} onChange={event => update.mutate({ id: item.id, endpoint: endpoints[tab as keyof typeof endpoints], value: { status: event.target.value, adminNotes: item.adminNotes ?? undefined } })}><option>NEW</option><option>IN_PROGRESS</option><option>RESOLVED</option><option>ARCHIVED</option></select><input value={note[item.id] ?? item.adminNotes ?? ""} onChange={event => setNote({ ...note, [item.id]: event.target.value })} onBlur={event => update.mutate({ id: item.id, endpoint: endpoints[tab as keyof typeof endpoints], value: { adminNotes: event.target.value } })} placeholder="Internal note" /></div>) : <div className="admin-empty">No requests match this view.</div>}</div><div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><span>Server page {page}</span><button type="button" disabled={!list.data || list.data.length < 8} onClick={() => setPage(page + 1)}>Next</button></div></>}{tab === "inventory" && <InventoryPanel products={inventory.data ?? []} adjust={adjust.mutate} canManage={canManage} />}{tab === "history" && <InventoryHistoryPanel history={history.data ?? []} />}{tab === "activity" && <><div className="operations-toolbar"><input value={activityAction} onChange={event => setActivityAction(event.target.value)} placeholder="Action" /><input value={activityUser} onChange={event => setActivityUser(event.target.value)} placeholder="User ID" /><label>From <input type="date" value={activityFrom} onChange={event => setActivityFrom(event.target.value)} /></label><label>To <input type="date" value={activityTo} onChange={event => setActivityTo(event.target.value)} /></label></div><div className="admin-table">{(activity.data ?? []).map(item => <div className="admin-table-row" key={item.id}><span><strong>{item.action}</strong><small>{item.entity}</small></span><span>{item.user.name} · {item.user.role}</span><span>{new Date(item.createdAt).toLocaleString("en-IN")}</span></div>)}</div></>}{tab === "staff" && canManage && <StaffPanel staff={staff.data ?? []} />}{tab === "categories" && <CategoryPanel categories={categories.data ?? []} canManage={canManage} />}{tab === "settings" && canManage && <SettingsPanel settings={settings.data ?? []} />}</section>;
+  return <section className="admin-panel operations-panel">
+    <DeleteNotice notice={deleteNotice} />
+    <div className="admin-tabs">{tabs.map(([key, label]) => <button type="button" className={tab === key ? "active" : ""} onClick={() => { setTab(key); setPage(1); }} key={key}>{label}</button>)}</div>
+    {(tab in endpoints) && <>
+      <div className="operations-toolbar"><input value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} placeholder="Search name, email or message" /><select value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}><option>ALL</option><option>NEW</option><option>IN_PROGRESS</option><option>RESOLVED</option><option>ARCHIVED</option></select></div>
+      <div className="admin-table">{list.isLoading ? <p className="admin-muted">Loading requests...</p> : list.data?.length ? list.data.map(item => {
+        const label = item.name ?? item.customerName ?? item.companyName ?? "request";
+        const deleteEndpoint = tab === "enquiries" ? "/admin/enquiries" : tab === "tradeins" ? "/admin/trade-ins" : "/admin/partnerships";
+        return <div className="admin-table-row enquiry-row" key={item.id}>
+          <span><strong>{label}</strong><small>{item.message ?? item.additionalDescription ?? "Request details available"}</small></span>
+          <span>{item.email ?? "—"}</span>
+          <span>{new Date(item.createdAt).toLocaleDateString("en-IN")}</span>
+          <select value={item.status} onChange={event => update.mutate({ id: item.id, endpoint: endpoints[tab as keyof typeof endpoints], value: { status: event.target.value, adminNotes: item.adminNotes ?? undefined } })}><option>NEW</option><option>IN_PROGRESS</option><option>RESOLVED</option><option>ARCHIVED</option></select>
+          <div className="enquiry-note-action"><input value={note[item.id] ?? item.adminNotes ?? ""} onChange={event => setNote({ ...note, [item.id]: event.target.value })} onBlur={event => update.mutate({ id: item.id, endpoint: endpoints[tab as keyof typeof endpoints], value: { adminNotes: event.target.value } })} placeholder="Internal note" />{canManage && <button type="button" className="icon-button delete-action" aria-label={`Delete ${label}`} title="Delete record" onClick={() => requestDelete(`${deleteEndpoint}/${item.id}`, label)}><Trash2 size={16} /></button>}</div>
+        </div>;
+      }) : <div className="admin-empty">No requests match this view.</div>}</div>
+      <div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</button><span>Server page {page}</span><button type="button" disabled={!list.data || list.data.length < 8} onClick={() => setPage(page + 1)}>Next</button></div>
+    </>}
+    {tab === "inventory" && <InventoryPanel products={inventory.data ?? []} adjust={adjust.mutate} canManage={canManage} onDelete={product => requestDelete(`/admin/products/${product.id}`, product.name)} />}
+    {tab === "history" && <InventoryHistoryPanel history={history.data ?? []} canManage={canManage} onDelete={item => requestDelete(`/admin/inventory/history/${item.id}`, `inventory adjustment for ${item.product.name}`)} />}
+    {tab === "activity" && <><div className="operations-toolbar"><input value={activityAction} onChange={event => setActivityAction(event.target.value)} placeholder="Action" /><input value={activityUser} onChange={event => setActivityUser(event.target.value)} placeholder="User ID" /><label>From <input type="date" value={activityFrom} onChange={event => setActivityFrom(event.target.value)} /></label><label>To <input type="date" value={activityTo} onChange={event => setActivityTo(event.target.value)} /></label></div><div className="admin-table">{(activity.data ?? []).map(item => <div className="admin-table-row activity-row" key={item.id}><span><strong>{item.action}</strong><small>{item.entity}</small></span><span>{item.user.name} · {item.user.role}</span><span>{new Date(item.createdAt).toLocaleString("en-IN")}</span>{canManage && <button type="button" className="icon-button delete-action" aria-label={`Delete ${item.action} activity record`} title="Delete activity record" onClick={() => requestDelete(`/admin/activity/${item.id}`, `${item.action} activity record`)}><Trash2 size={16} /></button>}</div>)}</div></>}
+    {tab === "staff" && canManage && <StaffPanel staff={staff.data ?? []} onDelete={user => requestDelete(`/admin/staff/${user.id}`, `staff account for ${user.name}`)} />}
+    {tab === "categories" && <CategoryPanel categories={categories.data ?? []} canManage={canManage} onDelete={category => requestDelete(`/admin/categories/${category.id}`, `category ${category.name}`)} />}
+    {tab === "settings" && canManage && <SettingsPanel settings={settings.data ?? []} onDelete={setting => requestDelete(`/admin/settings/${encodeURIComponent(setting.key)}`, `content setting ${setting.key}`)} />}
+    <DeleteConfirmation target={deleteTarget} pending={remove.isPending} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (deleteTarget) remove.mutate(deleteTarget); }} />
+  </section>;
 }
 
-function InventoryPanel({ products, adjust, canManage }: { products: Product[]; adjust: (input: { id: string; quantity: number; reason: string }) => void; canManage: boolean }) {
-  return <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Availability</span><span>{canManage ? "Adjustment" : "Access"}</span></div>{products.length ? products.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand}</small></span><span>{product.sku ?? "—"}</span><span className={product.stockQuantity <= 3 ? "low-stock" : ""}>{product.stockQuantity}</span><span>{product.stockQuantity <= 3 ? "Low stock" : "In stock"}</span><span>{canManage ? <button type="button" className="small-action" onClick={() => { const quantity = Number(window.prompt("Quantity adjustment (use a negative number to remove stock)", "1")); const reason = window.prompt("Reason", "Inventory count") ?? ""; if (Number.isInteger(quantity) && reason.length >= 3) adjust({ id: product.id, quantity, reason }); }}>Adjust</button> : "Read only"}</span></div>) : <div className="admin-empty">No inventory records yet.</div>}</div>;
+function InventoryPanel({ products, adjust, canManage, onDelete }: { products: Product[]; adjust: (input: { id: string; quantity: number; reason: string }) => void; canManage: boolean; onDelete: (product: Product) => void }) {
+  return <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Availability</span><span>{canManage ? "Adjustment" : "Access"}</span></div>{products.length ? products.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand}</small></span><span>{product.sku ?? "—"}</span><span className={product.stockQuantity <= 3 ? "low-stock" : ""}>{product.stockQuantity}</span><span>{product.stockQuantity <= 3 ? "Low stock" : "In stock"}</span><span className="inventory-actions">{canManage ? <><button type="button" className="small-action" onClick={() => { const quantity = Number(window.prompt("Quantity adjustment (use a negative number to remove stock)", "1")); const reason = window.prompt("Reason", "Inventory count") ?? ""; if (Number.isInteger(quantity) && reason.length >= 3) adjust({ id: product.id, quantity, reason }); }}>Adjust</button><button type="button" className="icon-button delete-action" aria-label={`Delete ${product.name}`} title="Delete product" onClick={() => onDelete(product)}><Trash2 size={16} /></button></> : "Read only"}</span></div>) : <div className="admin-empty">No inventory records yet.</div>}</div>;
 }
 
-function InventoryHistoryPanel({ history }: { history: Array<{ id: string; quantity: number; reason: string; createdAt: string; product: { name: string; sku?: string | null }; user: { name: string; role: string } }> }) {
-  return <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>Adjustment</span><span>User</span><span>Timestamp</span><span>Reason</span></div>{history.length ? history.map(item => <div className="admin-table-row" key={item.id}><span>{item.product.name}<small>{item.product.sku ?? "No SKU"}</small></span><span className={item.quantity < 0 ? "low-stock" : "status-live"}>{item.quantity > 0 ? `+${item.quantity}` : item.quantity}</span><span>{item.user.name} · {item.user.role}</span><span>{new Date(item.createdAt).toLocaleString("en-IN")}</span><span>{item.reason}</span></div>) : <div className="admin-empty">No inventory adjustments recorded yet.</div>}</div>;
+function InventoryHistoryPanel({ history, canManage, onDelete }: { history: Array<{ id: string; quantity: number; reason: string; createdAt: string; product: { name: string; sku?: string | null }; user: { name: string; role: string } }>; canManage: boolean; onDelete: (item: { id: string; product: { name: string } }) => void }) {
+  return <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>Adjustment</span><span>User</span><span>Timestamp</span><span>Reason</span></div>{history.length ? history.map(item => <div className="admin-table-row" key={item.id}><span>{item.product.name}<small>{item.product.sku ?? "No SKU"}</small></span><span className={item.quantity < 0 ? "low-stock" : "status-live"}>{item.quantity > 0 ? `+${item.quantity}` : item.quantity}</span><span>{item.user.name} · {item.user.role}</span><span>{new Date(item.createdAt).toLocaleString("en-IN")}</span><span className="history-reason-action"><span>{item.reason}</span>{canManage && <button type="button" className="icon-button delete-action" aria-label={`Delete inventory adjustment for ${item.product.name}`} title="Delete latest adjustment" onClick={() => onDelete(item)}><Trash2 size={16} /></button>}</span></div>) : <div className="admin-empty">No inventory adjustments recorded yet.</div>}</div>;
 }
 
-function StaffPanel({ staff }: { staff: Array<{ id: string; name: string; email: string; role: string; isActive: boolean }> }) {
+function StaffPanel({ staff, onDelete }: { staff: Array<{ id: string; name: string; email: string; role: string; isActive: boolean }>; onDelete: (user: { id: string; name: string }) => void }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "STAFF" });
   const save = useMutation({ mutationFn: () => apiRequest(`/admin/staff${editing ? `/${editing}` : ""}`, { method: editing ? "PATCH" : "POST", body: JSON.stringify({ ...form, ...(editing && !form.password ? { password: undefined } : {}) }) }), onSuccess: () => { setEditing(null); setForm({ name: "", email: "", password: "", role: "STAFF" }); void queryClient.invalidateQueries({ queryKey: ["admin-staff"] }); } });
   const update = useMutation({ mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => apiRequest(`/admin/staff/${id}`, { method: "PATCH", body: JSON.stringify({ isActive }) }), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["admin-staff"] }) });
-  return <><form className="operations-toolbar" onSubmit={event => { event.preventDefault(); save.mutate(); }}><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Full name" required minLength={2} /><input value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="Email" type="email" required /><input value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder={editing ? "New password (optional)" : "Password (10+ characters)"} type="password" minLength={editing ? 0 : 10} required={!editing} autoComplete="new-password" /><select value={form.role} onChange={event => setForm({ ...form, role: event.target.value })}><option>STAFF</option><option>ADMIN</option></select><button className="small-action" disabled={save.isPending}>{editing ? "Save changes" : "Create account"}</button>{editing && <button type="button" className="small-action" onClick={() => { setEditing(null); setForm({ name: "", email: "", password: "", role: "STAFF" }); }}>Cancel</button>}</form>{save.isError && <p className="form-status form-error">{(save.error as Error).message}</p>}<div className="admin-table"><div className="admin-table-row admin-table-head"><span>Name</span><span>Email</span><span>Role</span><span>Status</span><span>Action</span></div>{staff.map(user => <div className="admin-table-row" key={user.id}><span>{user.name}</span><span>{user.email}</span><span>{user.role}</span><span>{user.isActive ? "Active" : "Inactive"}</span><span><button className="small-action" onClick={() => { setEditing(user.id); setForm({ name: user.name, email: user.email, password: "", role: user.role }); }}>Edit</button><button className="small-action" onClick={() => update.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? "Deactivate" : "Activate"}</button></span></div>)}</div></>;
+  return <><form className="operations-toolbar" onSubmit={event => { event.preventDefault(); save.mutate(); }}><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Full name" required minLength={2} /><input value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="Email" type="email" required /><input value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} placeholder={editing ? "New password (optional)" : "Password (10+ characters)"} type="password" minLength={editing ? 0 : 10} required={!editing} autoComplete="new-password" /><select value={form.role} onChange={event => setForm({ ...form, role: event.target.value })}><option>STAFF</option><option>ADMIN</option></select><button className="small-action" disabled={save.isPending}>{editing ? "Save changes" : "Create account"}</button>{editing && <button type="button" className="small-action" onClick={() => { setEditing(null); setForm({ name: "", email: "", password: "", role: "STAFF" }); }}>Cancel</button>}</form>{save.isError && <p className="form-status form-error">{(save.error as Error).message}</p>}<div className="admin-table"><div className="admin-table-row admin-table-head"><span>Name</span><span>Email</span><span>Role</span><span>Status</span><span>Action</span></div>{staff.map(user => <div className="admin-table-row" key={user.id}><span>{user.name}</span><span>{user.email}</span><span>{user.role}</span><span>{user.isActive ? "Active" : "Inactive"}</span><span className="staff-actions"><button className="small-action" onClick={() => { setEditing(user.id); setForm({ name: user.name, email: user.email, password: "", role: user.role }); }}>Edit</button><button className="small-action" onClick={() => update.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? "Deactivate" : "Activate"}</button><button type="button" className="icon-button delete-action" aria-label={`Delete staff account for ${user.name}`} title="Delete staff account" onClick={() => onDelete(user)}><Trash2 size={16} /></button></span></div>)}</div></>;
 }
-function CategoryPanel({ categories, canManage }: { categories: Array<{ id: string; name: string; isActive: boolean }>; canManage: boolean }) {
+function CategoryPanel({ categories, canManage, onDelete }: { categories: Array<{ id: string; name: string; isActive: boolean }>; canManage: boolean; onDelete: (category: { id: string; name: string }) => void }) {
+  const queryClient = useQueryClient();
   const [name, setName] = useState("");
-  const create = useMutation({ mutationFn: () => apiRequest("/admin/categories", { method: "POST", body: JSON.stringify({ name }) }), onSuccess: () => setName("") });
-  return <><div className="operations-toolbar"><input value={name} onChange={event => setName(event.target.value)} placeholder="New category name" />{canManage && <button className="small-action" disabled={!name} onClick={() => create.mutate()}>Add category</button>}</div><div className="admin-table">{categories.map(category => <div className="admin-table-row" key={category.id}><span>{category.name}</span><span>{category.isActive ? "Active" : "Inactive"}</span></div>)}</div></>;
+  const create = useMutation({ mutationFn: () => apiRequest("/admin/categories", { method: "POST", body: JSON.stringify({ name }) }), onSuccess: async () => { setName(""); await queryClient.invalidateQueries({ queryKey: ["admin-categories"] }); await queryClient.invalidateQueries({ queryKey: ["categories"] }); } });
+  return <><div className="operations-toolbar"><input value={name} onChange={event => setName(event.target.value)} placeholder="New category name" />{canManage && <button className="small-action" disabled={!name} onClick={() => create.mutate()}>Add category</button>}</div><div className="admin-table">{categories.map(category => <div className="admin-table-row category-row" key={category.id}><span>{category.name}</span><span>{category.isActive ? "Active" : "Inactive"}</span>{canManage && <button type="button" className="icon-button delete-action" aria-label={`Delete category ${category.name}`} title="Delete category" onClick={() => onDelete(category)}><Trash2 size={16} /></button>}</div>)}</div></>;
 }
 
-function SettingsPanel({ settings }: { settings: Array<{ key: string; value: string }> }) {
+function SettingsPanel({ settings, onDelete }: { settings: Array<{ key: string; value: string }>; onDelete: (setting: { key: string }) => void }) {
+  const queryClient = useQueryClient();
   const [key, setKey] = useState(""); const [value, setValue] = useState("");
-  const save = useMutation({ mutationFn: () => apiRequest(`/admin/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }), onSuccess: () => { setKey(""); setValue(""); } });
-  return <><div className="operations-toolbar"><input value={key} onChange={event => setKey(event.target.value)} placeholder="Setting key" /><input value={value} onChange={event => setValue(event.target.value)} placeholder="Public content value" /><button className="small-action" disabled={!key} onClick={() => save.mutate()}>Save</button></div><div className="admin-table">{settings.map(setting => <div className="admin-table-row" key={setting.key}><span>{setting.key}</span><span>{setting.value}</span></div>)}</div></>;
+  const save = useMutation({ mutationFn: () => apiRequest(`/admin/settings/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) }), onSuccess: async () => { setKey(""); setValue(""); await queryClient.invalidateQueries({ queryKey: ["admin-settings"] }); } });
+  return <><div className="operations-toolbar"><input value={key} onChange={event => setKey(event.target.value)} placeholder="Setting key" /><input value={value} onChange={event => setValue(event.target.value)} placeholder="Public content value" /><button className="small-action" disabled={!key} onClick={() => save.mutate()}>Save</button></div><div className="admin-table">{settings.map(setting => <div className="admin-table-row content-row" key={setting.key}><span>{setting.key}</span><span>{setting.value}</span><button type="button" className="icon-button delete-action" aria-label={`Delete content setting ${setting.key}`} title="Delete content setting" onClick={() => onDelete(setting)}><Trash2 size={16} /></button></div>)}</div></>;
 }
 
 function AdminDashboard() {
@@ -1194,29 +1277,63 @@ function AdminProductForm({ productId }: { productId?: string }) {
 
 function ImageUpload({ initialUrl, onUploaded, onRemoved }: { initialUrl?: string; onUploaded: (url: string) => void; onRemoved: () => void }) {
   const [source, setSource] = useState<string>();
+  const [sourceFile, setSourceFile] = useState<File>();
+  const [cropping, setCropping] = useState(false);
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [cropWidth, setCropWidth] = useState("4");
+  const [cropHeight, setCropHeight] = useState("5");
   const [area, setArea] = useState<Area>();
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState(initialUrl);
-  const upload = useMutation({ mutationFn: (blob: Blob) => { const form = new FormData(); form.append("image", blob, "product-image.jpg"); return apiRequest<{ url: string }>("/admin/product-images", { method: "POST", body: form }); }, onSuccess: result => { const uploadedUrl = result.data.url; setUploadedUrl(uploadedUrl); onUploaded(uploadedUrl); setError(""); setSource(undefined); }, onError: reason => setError(reason instanceof Error ? reason.message : "The image could not be uploaded.") });
+  const requestedAspect = Number(cropWidth) / Number(cropHeight);
+  const cropAspect = Number.isFinite(requestedAspect) && requestedAspect > 0 ? requestedAspect : 1;
+  const upload = useMutation({ mutationFn: ({ blob, filename }: { blob: Blob; filename: string }) => { const form = new FormData(); form.append("image", blob, filename); return apiRequest<{ url: string }>("/admin/product-images", { method: "POST", body: form }); }, onSuccess: result => { const uploadedUrl = result.data.url; setUploadedUrl(uploadedUrl); onUploaded(uploadedUrl); setError(""); setSource(undefined); setSourceFile(undefined); setCropping(false); }, onError: reason => setError(reason instanceof Error ? reason.message : "The image could not be uploaded.") });
+  useEffect(() => {
+    if (!source) return;
+    return () => URL.revokeObjectURL(source);
+  }, [source]);
   const selectFile = useCallback((file?: File) => {
     setError("");
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setError("Choose a JPG, PNG, or WebP image."); return; }
     if (file.size > 8 * 1024 * 1024) { setError("Images must be 8MB or smaller."); return; }
-    setSource(URL.createObjectURL(file)); setCrop({ x: 0, y: 0 }); setZoom(1); setRotation(0);
+    setSource(URL.createObjectURL(file)); setSourceFile(file); setCropping(false); setCrop({ x: 0, y: 0 }); setZoom(1); setRotation(0);
   }, []);
-  const apply = async () => {
+  const applyCrop = async () => {
     if (!source) return;
     try {
       const croppedBlob = await createCroppedImage(source, area, rotation);
-      await upload.mutateAsync(croppedBlob);
+      await upload.mutateAsync({ blob: croppedBlob, filename: "product-image.jpg" });
     } catch (reason) { setError(reason instanceof Error ? reason.message : "The image could not be prepared."); }
   };
-  return <div className="image-upload-field"><span className="upload-label">Product image <small>JPG, PNG, or WebP · max 8MB · 4:5 crop</small></span>{source ? <div className="cropper-panel"><div className="cropper-stage"><Cropper image={source} crop={crop} zoom={zoom} rotation={rotation} aspect={4 / 5} onCropChange={setCrop} onZoomChange={setZoom} onRotationChange={setRotation} onCropComplete={(_, pixels) => setArea(pixels)} /></div><div className="cropper-controls"><label>Zoom<input type="range" min="1" max="3" step=".1" value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label><label>Rotate<input type="range" min="-180" max="180" value={rotation} onChange={event => setRotation(Number(event.target.value))} /></label><button type="button" className="small-action" onClick={() => { setCrop({ x: 0, y: 0 }); setZoom(1); setRotation(0); }}>Reset</button><button type="button" className="small-action" onClick={() => setSource(undefined)}>Cancel</button><button type="button" className="small-action" disabled={upload.isPending} onClick={() => void apply()}>{upload.isPending ? "Uploading..." : "Apply crop & upload"}</button></div></div> : <label className={`upload-dropzone ${dragging ? "is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }}><input type="file" accept="image/jpeg,image/png,image/webp" onChange={event => selectFile(event.target.files?.[0])} /><strong>Drop an image here or browse your device</strong><span>Use a clear product photo. {uploadedUrl ? "Uploading a new image will replace the current one." : ""}</span></label>}{error && <p className="form-status form-error" role="alert">{error}</p>}{uploadedUrl && !source && <div className="upload-preview-wrap"><img className="upload-preview" src={uploadedUrl} alt="Uploaded product" /><button type="button" className="small-action" onClick={() => { setUploadedUrl(undefined); onRemoved(); }}>Remove image</button></div>}</div>;
+  return <div className="image-upload-field">
+    <span className="upload-label">Product image <small>JPG, PNG, or WebP · max 8MB · original image or optional free-size crop</small></span>
+    {source ? <div className="cropper-panel">
+      {cropping
+        ? <div className="cropper-stage"><Cropper image={source} crop={crop} zoom={zoom} rotation={rotation} aspect={cropAspect} onCropChange={setCrop} onZoomChange={setZoom} onRotationChange={setRotation} onCropComplete={(_, pixels) => setArea(pixels)} /></div>
+        : <div className="original-image-preview"><img src={source} alt="Preview of selected product image" /></div>}
+      <div className="cropper-controls">
+        {cropping && <>
+          <label>Crop width<input type="number" min=".1" max="20" step=".1" value={cropWidth} onChange={event => setCropWidth(event.target.value)} /></label>
+          <label>Crop height<input type="number" min=".1" max="20" step=".1" value={cropHeight} onChange={event => setCropHeight(event.target.value)} /></label>
+          <label>Zoom<input type="range" min="1" max="3" step=".1" value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label>
+          <label>Rotate<input type="range" min="-180" max="180" value={rotation} onChange={event => setRotation(Number(event.target.value))} /></label>
+          <button type="button" className="small-action" onClick={() => { setCrop({ x: 0, y: 0 }); setZoom(1); setRotation(0); }}>Reset</button>
+        </>}
+        {!cropping && <button type="button" className="small-action" onClick={() => { setCropping(true); setCrop({ x: 0, y: 0 }); setZoom(1); setRotation(0); }}>Crop image</button>}
+        {cropping
+          ? <button type="button" className="small-action" onClick={() => setCropping(false)} disabled={upload.isPending}>Back to preview</button>
+          : <button type="button" className="small-action" onClick={() => { setSource(undefined); setSourceFile(undefined); }} disabled={upload.isPending}>Cancel</button>}
+        {!cropping && <button type="button" className="small-action" disabled={upload.isPending || !sourceFile} onClick={() => sourceFile && void upload.mutateAsync({ blob: sourceFile, filename: sourceFile.name })}>{upload.isPending ? "Uploading..." : "Upload original"}</button>}
+        {cropping && <button type="button" className="small-action" disabled={upload.isPending} onClick={() => void applyCrop()}>{upload.isPending ? "Uploading..." : "Apply crop & upload"}</button>}
+      </div>
+    </div> : <label className={`upload-dropzone ${dragging ? "is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); selectFile(event.dataTransfer.files[0]); }}><input type="file" accept="image/jpeg,image/png,image/webp" onChange={event => selectFile(event.target.files?.[0])} /><strong>Drop an image here or browse your device</strong><span>Use a clear product photo. {uploadedUrl ? "Uploading a new image will replace the current one." : ""}</span></label>}
+    {error && <p className="form-status form-error" role="alert">{error}</p>}
+    {uploadedUrl && !source && <div className="upload-preview-wrap"><img className="upload-preview" src={uploadedUrl} alt="Uploaded product" /><button type="button" className="small-action" onClick={() => { setUploadedUrl(undefined); onRemoved(); }}>Remove image</button></div>}
+  </div>;
 }
 
 function App() { return <Routes><Route path="/login" element={<Login />} /><Route path="/admin/login" element={<Login />} /><Route path="/register" element={<Register />} /><Route path="/setup" element={<InitialSetup />} /><Route path="/account" element={<Account />} /><Route path="/admin/products/new" element={<AdminProductForm />} /><Route path="/admin/products/:productId/edit" element={<AdminProductEdit />} /><Route path="/admin/*" element={<AdminDashboard />} /><Route path="/staff/*" element={<AdminDashboard />} /><Route path="*" element={<Layout><Routes><Route path="/" element={<Home />} /><Route path="/about" element={<About />} /><Route path="/services" element={<Services />} /><Route path="/products" element={<Products />} /><Route path="/devices" element={<Products />} /><Route path="/products/:slug" element={<ProductDetails />} /><Route path="/trade-in" element={<FormPage type="trade" />} /><Route path="/partnership" element={<FormPage type="partner" />} /><Route path="/contact" element={<Contact />} /><Route path="/how-it-works" element={<HowItWorks />} /><Route path="*" element={<Home />} /></Routes></Layout>} /></Routes>; }

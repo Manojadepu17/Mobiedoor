@@ -21,6 +21,30 @@ describe("public API security and contracts", () => {
     expect(response.headers["cache-control"]).toBe("private, no-store");
   });
 
+  it("allows the equivalent loopback frontend origin without allowing arbitrary origins", async () => {
+    const frontend = new URL(config.frontendUrl);
+    const loopbackAlias = new URL(config.frontendUrl);
+    loopbackAlias.hostname = frontend.hostname === "localhost" ? "127.0.0.1" : "localhost";
+
+    if (config.frontendOrigins.includes(loopbackAlias.origin)) {
+      const preflight = await request(app)
+        .options("/auth/login")
+        .set("Origin", loopbackAlias.origin)
+        .set("Access-Control-Request-Method", "POST");
+
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers["access-control-allow-origin"]).toBe(loopbackAlias.origin);
+    }
+
+    const rejected = await request(app)
+      .post("/auth/login")
+      .set("Origin", "https://untrusted.example")
+      .send({ email: "not-an-email", password: "short" });
+
+    expect(rejected.status).toBe(403);
+    expect(rejected.body.error.code).toBe("ORIGIN_NOT_ALLOWED");
+  });
+
   it("adds no-store cache protection to API error responses", async () => {
     const response = await request(app).post("/auth/login").send({ email: "not-an-email", password: "short" });
 

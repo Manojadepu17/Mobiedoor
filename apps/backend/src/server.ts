@@ -17,6 +17,8 @@ import { logger } from "./logger.js";
 
 const app = express();
 app.set("trust proxy", config.trustProxy);
+const allowedFrontendOrigins = new Set(config.frontendOrigins);
+const isAllowedFrontendOrigin = (origin: string) => allowedFrontendOrigins.has(origin);
 app.use((_request, response, next) => {
   response.setHeader("Cache-Control", "private, no-store");
   next();
@@ -127,7 +129,10 @@ const settingSchema = z.object({ value: z.string().trim().max(10000) });
 
 app.disable("x-powered-by");
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-app.use(cors({ origin: config.frontendUrl, credentials: true }));
+app.use(cors({
+  origin: (origin, callback) => callback(null, !origin || isAllowedFrontendOrigin(origin)),
+  credentials: true,
+}));
 app.use(express.json({ limit: "1mb" }));
 
 app.use((request, response, next) => {
@@ -136,7 +141,7 @@ app.use((request, response, next) => {
     return;
   }
   const origin = request.get("origin");
-  if (origin && origin !== config.frontendUrl) {
+  if (origin && !isAllowedFrontendOrigin(origin)) {
     response.status(403).json({ error: { code: "ORIGIN_NOT_ALLOWED", message: "Request origin is not allowed." } });
     return;
   }
@@ -506,6 +511,64 @@ app.get("/admin/inventory/history", requireAuth, requireRoles(...adminRoles, Use
     response.json({ data });
   } catch (error) { next(error); }
 });
+app.delete("/admin/inventory/history/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
+  try {
+    const outcome = await prisma.$transaction(async transaction => {
+      const selectedAdjustment = await transaction.inventoryAdjustment.findUniqueOrThrow({
+        where: { id: getParam(request, "id") },
+        select: { productId: true },
+      });
+      await transaction.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM products WHERE id = ${selectedAdjustment.productId} FOR UPDATE
+      `;
+      const adjustment = await transaction.inventoryAdjustment.findUniqueOrThrow({
+        where: { id: getParam(request, "id") },
+        include: { product: { select: { stockQuantity: true } } },
+      });
+      const latest = await transaction.inventoryAdjustment.findFirst({
+        where: { productId: adjustment.productId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: { id: true },
+      });
+      if (latest?.id !== adjustment.id) return { conflict: "Only the latest inventory adjustment can be deleted to preserve stock history." };
+      if (adjustment.stockQuantityAfter === null) {
+        return { conflict: "This adjustment has no stock snapshot and cannot be safely reversed." };
+      }
+      if (adjustment.stockQuantityAfter !== adjustment.product.stockQuantity) {
+        return { conflict: "The current stock no longer matches this adjustment. Inventory history was not changed." };
+      }
+      const restoredStock = adjustment.product.stockQuantity - adjustment.quantity;
+      if (restoredStock < 0 || restoredStock > MAX_DATABASE_STOCK_QUANTITY) {
+        return { conflict: "This adjustment cannot be safely reversed. Inventory history was not changed." };
+      }
+      const availability = restoredStock === 0
+        ? ProductAvailability.OUT_OF_STOCK
+        : restoredStock <= 3
+          ? ProductAvailability.LOW_STOCK
+          : ProductAvailability.IN_STOCK;
+      await transaction.product.update({
+        where: { id: adjustment.productId },
+        data: { stockQuantity: restoredStock, availability },
+      });
+      await transaction.inventoryAdjustment.delete({ where: { id: adjustment.id } });
+      await transaction.activityLog.create({
+        data: {
+          userId: request.user!.id,
+          action: "DELETE",
+          entity: "INVENTORY_ADJUSTMENT",
+          entityId: adjustment.id,
+          metadata: { quantity: adjustment.quantity, restoredStock },
+        },
+      });
+      return { conflict: null };
+    });
+    if (outcome.conflict) {
+      response.status(409).json({ error: { code: "INVENTORY_HISTORY_NOT_SAFE_TO_DELETE", message: outcome.conflict } });
+      return;
+    }
+    response.status(204).send();
+  } catch (error) { next(error); }
+});
 
 async function enquiryList(request: express.Request, response: express.Response, next: express.NextFunction, type: "contact" | "trade" | "partnership") {
   try {
@@ -535,6 +598,9 @@ app.get("/admin/partnerships", requireAuth, requireRoles(...adminRoles, UserRole
 app.patch("/admin/enquiries/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => updateEnquiry(request, response, next, "contact"));
 app.patch("/admin/trade-ins/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => updateEnquiry(request, response, next, "trade"));
 app.patch("/admin/partnerships/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => updateEnquiry(request, response, next, "partnership"));
+app.delete("/admin/enquiries/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => deleteEnquiry(request, response, next, "contact"));
+app.delete("/admin/trade-ins/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => deleteEnquiry(request, response, next, "trade"));
+app.delete("/admin/partnerships/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => deleteEnquiry(request, response, next, "partnership"));
 
 async function updateEnquiry(request: express.Request, response: express.Response, next: express.NextFunction, type: "contact" | "trade" | "partnership") {
   try {
@@ -543,6 +609,21 @@ async function updateEnquiry(request: express.Request, response: express.Respons
     const data = type === "contact" ? await prisma.contactEnquiry.update({ where: { id: enquiryId }, data: input }) : type === "trade" ? await prisma.tradeInEnquiry.update({ where: { id: enquiryId }, data: input }) : await prisma.partnershipEnquiry.update({ where: { id: enquiryId }, data: input });
     await recordActivity(request.user!.id, input.status ? "UPDATE_STATUS" : "UPDATE_NOTE", `${type.toUpperCase()}_ENQUIRY`, enquiryId, input.status ? { status: input.status } : undefined);
     response.json({ data });
+  } catch (error) { next(error); }
+}
+
+async function deleteEnquiry(request: express.Request, response: express.Response, next: express.NextFunction, type: "contact" | "trade" | "partnership") {
+  try {
+    const id = getParam(request, "id");
+    await prisma.$transaction(async transaction => {
+      if (type === "contact") await transaction.contactEnquiry.delete({ where: { id } });
+      else if (type === "trade") await transaction.tradeInEnquiry.delete({ where: { id } });
+      else await transaction.partnershipEnquiry.delete({ where: { id } });
+      await transaction.activityLog.create({
+        data: { userId: request.user!.id, action: "DELETE", entity: `${type.toUpperCase()}_ENQUIRY`, entityId: id },
+      });
+    });
+    response.status(204).send();
   } catch (error) { next(error); }
 }
 
@@ -597,6 +678,42 @@ app.patch("/admin/staff/:id", requireAuth, requireRoles(...adminRoles), adminMut
     next(error);
   }
 });
+app.delete("/admin/staff/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
+  try {
+    const userId = getParam(request, "id");
+    const outcome = await prisma.$transaction(async transaction => {
+      const user = await transaction.user.findUnique({ where: { id: userId }, select: { role: true, isActive: true } });
+      if (user?.role === UserRole.FOUNDER) return { error: { status: 403, code: "FOUNDER_PROTECTED", message: "Founder accounts cannot be deleted through staff management." } };
+      if (!user || !operationalStaffRoles.includes(user.role)) return { error: { status: 404, code: "STAFF_ACCOUNT_NOT_FOUND", message: "The operational staff account was not found." } };
+      if (user.role === UserRole.ADMIN && user.isActive) {
+        const activePrivilegedUsers = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM users
+          WHERE role IN ('FOUNDER', 'ADMIN') AND is_active = 1
+          FOR UPDATE
+        `;
+        if (activePrivilegedUsers.length <= 1) return { error: { status: 409, code: "LAST_ACTIVE_ADMIN", message: "At least one active Founder or Admin account must remain." } };
+      }
+      const [activityCount, adjustmentCount] = await Promise.all([
+        transaction.activityLog.count({ where: { userId } }),
+        transaction.inventoryAdjustment.count({ where: { userId } }),
+      ]);
+      if (activityCount > 0 || adjustmentCount > 0) {
+        return { error: { status: 409, code: "STAFF_HAS_HISTORY", message: "This account has activity or inventory history and cannot be deleted. Deactivate it to preserve historical records." } };
+      }
+      await transaction.session.deleteMany({ where: { userId } });
+      await transaction.user.delete({ where: { id: userId } });
+      await transaction.activityLog.create({
+        data: { userId: request.user!.id, action: "DELETE", entity: "STAFF", entityId: userId },
+      });
+      return { error: null };
+    });
+    if (outcome.error) {
+      response.status(outcome.error.status).json({ error: { code: outcome.error.code, message: outcome.error.message } });
+      return;
+    }
+    response.status(204).send();
+  } catch (error) { next(error); }
+});
 app.get("/admin/activity", requireAuth, requireRoles(...adminRoles, UserRole.STAFF), async (request, response, next) => {
   try {
     const query = z.object({ action: z.string().trim().max(100).optional(), userId: z.string().trim().max(100).optional(), from: z.coerce.date().optional(), to: z.coerce.date().optional() }).parse(request.query);
@@ -604,11 +721,55 @@ app.get("/admin/activity", requireAuth, requireRoles(...adminRoles, UserRole.STA
     response.json({ data });
   } catch (error) { next(error); }
 });
+app.delete("/admin/activity/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
+  try {
+    const id = getParam(request, "id");
+    await prisma.$transaction(async transaction => {
+      await transaction.activityLog.delete({ where: { id } });
+      await transaction.activityLog.create({
+        data: { userId: request.user!.id, action: "DELETE", entity: "ACTIVITY_LOG", entityId: id },
+      });
+    });
+    response.status(204).send();
+  } catch (error) { next(error); }
+});
 app.get("/admin/categories", requireAuth, requireRoles(...adminRoles, UserRole.STAFF), async (_request, response, next) => { try { response.json({ data: await prisma.category.findMany({ orderBy: { name: "asc" } }) }); } catch (error) { next(error); } });
 app.post("/admin/categories", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => { try { const data = await prisma.category.create({ data: categorySchema.parse(request.body) }); await recordActivity(request.user!.id, "CREATE", "CATEGORY", data.id); response.status(201).json({ data }); } catch (error) { next(error); } });
 app.patch("/admin/categories/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => { try { const data = await prisma.category.update({ where: { id: getParam(request, "id") }, data: categorySchema.partial().parse(request.body) }); await recordActivity(request.user!.id, "UPDATE", "CATEGORY", data.id); response.json({ data }); } catch (error) { next(error); } });
+app.delete("/admin/categories/:id", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
+  try {
+    const id = getParam(request, "id");
+    const outcome = await prisma.$transaction(async transaction => {
+      const category = await transaction.category.findUniqueOrThrow({ where: { id }, select: { name: true } });
+      const productCount = await transaction.product.count({ where: { category: category.name } });
+      if (productCount > 0) return { inUse: true };
+      await transaction.category.delete({ where: { id } });
+      await transaction.activityLog.create({ data: { userId: request.user!.id, action: "DELETE", entity: "CATEGORY", entityId: id } });
+      return { inUse: false };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (outcome.inUse) {
+      response.status(409).json({ error: { code: "CATEGORY_IN_USE", message: "This category is assigned to products and cannot be deleted." } });
+      return;
+    }
+    response.status(204).send();
+  } catch (error) { next(error); }
+});
 app.get("/admin/settings", requireAuth, requireRoles(...adminRoles), async (_request, response, next) => { try { response.json({ data: await prisma.websiteSetting.findMany({ orderBy: { key: "asc" } }) }); } catch (error) { next(error); } });
 app.put("/admin/settings/:key", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => { try { const key = getParam(request, "key"); if (!/^[a-z0-9._-]+$/.test(key)) { response.status(400).json({ error: { code: "INVALID_SETTING_KEY", message: "Invalid setting key." } }); return; } const data = await prisma.websiteSetting.upsert({ where: { key }, update: settingSchema.parse(request.body), create: { key, ...settingSchema.parse(request.body) } }); await recordActivity(request.user!.id, "UPDATE", "SETTING", key); response.json({ data }); } catch (error) { next(error); } });
+app.delete("/admin/settings/:key", requireAuth, requireRoles(...adminRoles), adminMutationLimiter, async (request, response, next) => {
+  try {
+    const key = getParam(request, "key");
+    if (!/^[a-z0-9._-]+$/.test(key)) {
+      response.status(400).json({ error: { code: "INVALID_SETTING_KEY", message: "Invalid setting key." } });
+      return;
+    }
+    await prisma.$transaction(async transaction => {
+      await transaction.websiteSetting.delete({ where: { key } });
+      await transaction.activityLog.create({ data: { userId: request.user!.id, action: "DELETE", entity: "SETTING", entityId: key } });
+    });
+    response.status(204).send();
+  } catch (error) { next(error); }
+});
 
 function getParam(request: express.Request, name: string) {
   const value = request.params[name];
