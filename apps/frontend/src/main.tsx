@@ -17,10 +17,17 @@ import {
   type ShopFilters,
 } from "./shop-state";
 import { ProductDetailContent } from "./product-details";
-import { CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
+import { CatalogueCacheStatus, CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
 import { VerifiedBadge } from "./verified-badge";
 import { CATEGORY_IMAGES, HERO_IMAGES } from "./config/homepageImages";
 import { optimizedProductImageUrl, PRODUCT_IMAGE_FALLBACK } from "./image-url";
+import { apiRequest, ApiError, describeApiError, getApiErrorStatus, type ApiEnvelope } from "./api-client";
+import {
+  catalogueRetryCount,
+  catalogueRetryDelay,
+  fetchAllCatalogueProducts,
+  readCatalogueInitialData,
+} from "./catalogue-service";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -35,139 +42,14 @@ const queryClient = new QueryClient({
     },
   },
 });
-const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
-if (import.meta.env.PROD && configuredApiUrl !== "/api") {
-  throw new Error('VITE_API_URL must be exactly "/api" in production.');
-}
-const API_URL = (configuredApiUrl ?? "http://localhost:4000").replace(/\/+$/, "");
-
-function apiRequestUrl(path: string) {
-  const normalizedPath = `/${path.replace(/^\/+/, "")}`;
-  const baseHasApiPrefix = API_URL === "/api" || API_URL.endsWith("/api");
-  const requestPath = baseHasApiPrefix && (normalizedPath === "/api" || normalizedPath.startsWith("/api/"))
-    ? normalizedPath.slice(4) || "/"
-    : normalizedPath;
-  return `${API_URL}${requestPath}`;
-}
-
-type Product = {
+export type Product = {
   id: string; name: string; slug: string; sku?: string; brand: string; model: string;
   description: string; priceInPaise: number; originalPriceInPaise?: number | null;
   condition: "LIKE_NEW" | "EXCELLENT" | "GOOD" | "FAIR"; category: string;
   stockQuantity: number; warrantyMonths?: number; imageUrls: string[]; specifications?: unknown; availability?: "IN_STOCK" | "LOW_STOCK" | "OUT_OF_STOCK"; isPublished?: boolean;
 };
 
-type ApiEnvelope<T> = { data: T; meta?: { page: number; limit: number; total: number; totalPages: number }; message?: string; error?: { code?: string; message?: string } };
 type AuthUser = { id: string; name: string; email: string; role: "FOUNDER" | "ADMIN" | "STAFF" | "CUSTOMER" };
-
-class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string, readonly retryAfterSeconds?: number) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-function getApiErrorStatus(error: unknown) {
-  if (error instanceof ApiError) return error.status;
-  return typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
-    ? error.status
-    : undefined;
-}
-
-function describeApiError(error: unknown) {
-  const status = getApiErrorStatus(error);
-  const message = error instanceof Error
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
-        ? error.message
-        : "No additional request details were provided.";
-  return `${status === undefined ? "" : `HTTP ${status}: `}${message}`;
-}
-
-async function apiRequest<T>(path: string, options?: RequestInit): Promise<ApiEnvelope<T>> {
-  const isFormData = options?.body instanceof FormData;
-  const requestUrl = apiRequestUrl(path);
-  const method = (options?.method ?? "GET").toUpperCase();
-  const requestKey = `${method}:${requestUrl}:${isFormData ? "form" : typeof options?.body === "string" ? options.body : ""}`;
-  const sharedGetRequests = apiRequest as typeof apiRequest & { getRequests?: Map<string, Promise<Response>> };
-  sharedGetRequests.getRequests ??= new Map();
-  let response: Response;
-  if (method === "GET" && sharedGetRequests.getRequests.has(requestKey)) {
-    response = (await sharedGetRequests.getRequests.get(requestKey)!).clone();
-  } else {
-    const request = fetch(requestUrl, {
-    ...options,
-    credentials: "include",
-    headers: { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options?.headers ?? {}) },
-    });
-    if (method === "GET") {
-      sharedGetRequests.getRequests.set(requestKey, request);
-      void request.finally(() => sharedGetRequests.getRequests?.delete(requestKey)).catch(() => undefined);
-    }
-    response = await request;
-  }
-  if (response.status === 204) return { data: null as T };
-  let body: ApiEnvelope<T> & { error?: { message?: string } };
-  try {
-    body = await response.json() as ApiEnvelope<T> & { error?: { message?: string } };
-  } catch (error) {
-    if (options?.signal?.aborted) throw error;
-    if (!response.ok) throw new ApiError(`The API request failed with HTTP ${response.status}.`, response.status);
-    throw new ApiError("The API returned an invalid response.", response.status);
-  }
-  if (!response.ok) {
-    const retryAfterHeader = response.headers.get("Retry-After");
-    const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : undefined;
-    throw new ApiError(
-      body.error?.message ?? "The request could not be completed.",
-      response.status,
-      body.error?.code,
-      Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined,
-    );
-  }
-  return body;
-}
-
-class ApiTimeoutError extends Error {
-  constructor() {
-    super("The catalogue request timed out.");
-    this.name = "ApiTimeoutError";
-  }
-}
-
-async function fetchAllCatalogueProducts(filters: ShopFilters, signal?: AbortSignal) {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 30_000);
-  const abortRequest = () => controller.abort();
-  if (signal?.aborted) abortRequest();
-  else signal?.addEventListener("abort", abortRequest, { once: true });
-
-  try {
-    const query = productsQuery(filters);
-    query.set("limit", "50");
-    const firstPage = await apiRequest<Product[]>(`/products?${query}`, { signal: controller.signal });
-    const totalPages = firstPage.meta?.totalPages ?? 1;
-    const additionalPages = await Promise.all(
-      Array.from({ length: Math.max(0, totalPages - 1) }, async (_, index) => {
-        const pageQuery = new URLSearchParams(query);
-        pageQuery.set("page", String(index + 2));
-        return apiRequest<Product[]>(`/products?${pageQuery}`, { signal: controller.signal });
-      }),
-    );
-    return {
-      ...firstPage,
-      data: [ ...firstPage.data, ...additionalPages.flatMap(page => page.data) ],
-    };
-  } catch (error) {
-    if (controller.signal.aborted && !signal?.aborted) throw new ApiTimeoutError();
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-    signal?.removeEventListener("abort", abortRequest);
-  }
-}
 
 function createCroppedImage(source: string, crop: Area | undefined, rotation: number) {
   return new Promise<Blob>((resolve, reject) => {
@@ -600,16 +482,13 @@ function BrandDiscovery({ products }: { products: Product[] }) {
 }
 
 function HomeProductShelves() {
+  const initialCatalogue = readCatalogueInitialData({ search: "", category: ALL_DEVICES_CATEGORY, sort: "Newest" });
   const { data, isLoading, isError, error, refetch } = useQuery<ApiEnvelope<Product[]>>({
     queryKey: ["home-catalogue"],
     queryFn: () => fetchAllCatalogueProducts({ search: "", category: ALL_DEVICES_CATEGORY, sort: "Newest" }),
-    retry: (failureCount, requestError) => {
-      if (failureCount >= 2) return false;
-      const status = getApiErrorStatus(requestError);
-      if (status !== undefined) return status === 408 || status >= 500;
-      return requestError instanceof TypeError || requestError instanceof ApiTimeoutError;
-    },
-    retryDelay: attempt => Math.min(750 * 2 ** attempt, 3_000),
+    initialData: initialCatalogue?.data,
+    retry: catalogueRetryCount,
+    retryDelay: catalogueRetryDelay,
     staleTime: 60_000,
   });
   if (isLoading) return <>
@@ -618,7 +497,7 @@ function HomeProductShelves() {
     <HomeBrandOffers />
     <ProductShelfLoading id="new-arrivals" title="Recently added" />
   </>;
-  if (isError || !data) return <>
+  if (!data) return <>
     <DealsOfTheDay products={[]} isError />
     <HomePromotions />
     <HomeBrandOffers />
@@ -647,6 +526,7 @@ function HomeProductShelves() {
     <DealsOfTheDay products={deals} />
     <HomePromotions />
     <HomeBrandOffers />
+    {isError && <div className="container"><CatalogueCacheStatus createdAt={initialCatalogue?.createdAt} onRetry={() => void refetch()} /></div>}
     <ProductRail id="new-arrivals" eyebrow="Fresh from the catalogue" title="Recently added" products={products.slice(0, 8)} viewAllTo={`${SHOP_ROUTE}?sort=newest`} />
     {categoryShelves.map(category => <ProductRail
       id={`shelf-${category.value}`}
@@ -1007,10 +887,14 @@ function Products() {
   const updateRefinement = (key: "brand" | "minPrice" | "maxPrice" | "condition" | "availability", value: string) => {
     setSearchParams(updateShopRefinement(searchParams, key, value), { replace: true });
   };
-  const { data, isLoading, isError } = useQuery<ApiEnvelope<Product[]>>({
+  const initialCatalogue = readCatalogueInitialData({ search, category, sort });
+  const { data, isLoading, isError, refetch } = useQuery<ApiEnvelope<Product[]>>({
     queryKey: ["products", search, category, sort],
     queryFn: () => fetchAllCatalogueProducts({ search, category, sort }),
-    retry: false,
+    initialData: initialCatalogue?.data,
+    retry: catalogueRetryCount,
+    retryDelay: catalogueRetryDelay,
+    staleTime: 60_000,
   });
   const allProducts = data?.data ?? [];
   const filteredProducts = filterShopProducts(allProducts, refinements);
@@ -1062,9 +946,10 @@ function Products() {
           <label><span>Availability</span><select aria-label="Filter by availability" value={refinements.availability} onChange={event => updateRefinement("availability", event.target.value)}><option value="">Any availability</option><option value="in-stock">In stock</option><option value="out-of-stock">Out of stock</option></select></label>
           {hasFilters && <button className="clear-all-filters" type="button" onClick={clearFilters}>Clear filters</button>}
         </div>
+        {isError && data && <CatalogueCacheStatus createdAt={initialCatalogue?.createdAt} onRetry={() => void refetch()} />}
         {data && !isError && filteredProducts.length > 0 && <p className="product-results-count" role="status">Showing {visibleStart}–{visibleEnd} of {filteredProducts.length} devices</p>}
         {isLoading && <CatalogueSkeletonGrid count={12} />}
-        {isError && <CatalogueStatus state="error" />}
+        {isError && !data && <CatalogueStatus state="error" onRetry={() => void refetch()} />}
         {data && filteredProducts.length === 0 && <CatalogueStatus state="empty" hasFilters={hasFilters} onClear={clearFilters} />}
         {data && filteredProducts.length > 0 && <>
           <div className="product-grid api-products">{products.map(product => <ProductCard product={product} key={product.id} />)}</div>

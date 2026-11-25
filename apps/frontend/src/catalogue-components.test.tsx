@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
+import { CatalogueCacheStatus, CataloguePagination, CatalogueSkeletonGrid, CatalogueStatus } from "./catalogue-components";
 
 vi.mock("react-router-dom", () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
@@ -55,5 +55,12 @@ describe("catalogue loading, error, and empty states", () => {
     expect(lastPage.match(/disabled=""/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<CataloguePagination page={1} totalPages={1} onPrevious={() => {}} onNext={() => {}} />))
       .toContain("Page 1 of 1");
+  });
+
+  it("shows an unobtrusive cached-catalogue status", () => {
+    const markup = renderToStaticMarkup(<CatalogueCacheStatus createdAt={Date.now()} onRetry={() => {}} />);
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain("Cached catalogue");
+    expect(markup).toContain("Retry now");
   });
 });

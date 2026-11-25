@@ -40,3 +40,11 @@ export function CatalogueStatus({ state, hasFilters = false, onClear, errorDetai
   }
   return <div className="catalogue-state" role="status"><Search size={25} /><h2>{hasFilters ? "No devices match these filters." : "No published devices yet."}</h2><p>{hasFilters ? "Try a different brand, model or category." : "The live catalogue is being prepared. Check back soon or ask our team about availability."}</p>{hasFilters && onClear && <button type="button" className="button text" onClick={onClear}>Clear filters <X size={16} /></button>}</div>;
 }
+
+export function CatalogueCacheStatus({ createdAt, onRetry }: { createdAt?: number; onRetry?: () => void }) {
+  const age = createdAt ? Math.max(0, Math.round((Date.now() - createdAt) / 60_000)) : undefined;
+  return <div className="catalogue-cache-status" role="status">
+    <span>Cached catalogue{age !== undefined ? ` (${age < 1 ? "just now" : `${age} min ago`})` : ""} — live revalidation is in progress.</span>
+    {onRetry && <button type="button" onClick={onRetry}>Retry now</button>}
+  </div>;
+}

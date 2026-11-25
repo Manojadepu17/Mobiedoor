@@ -62,6 +62,25 @@ export function isProductInventoryHistoryConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003";
 }
 
+export function isTransientPrismaReadError(error: unknown) {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  return ["P1001", "P1002", "P2024"].includes(error.code);
+}
+
+export async function retryPrismaRead<T>(operation: () => Promise<T>, attempts = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientPrismaReadError(error) || attempt === attempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 50 * (2 ** attempt)));
+    }
+  }
+  throw lastError;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -172,7 +191,7 @@ cleanupTimer.unref();
 void cleanupExpiredSessions().catch(error => logger.error("Session cleanup failed", error));
 
 app.get("/health", async (_request, response, next) => {
-  try { await prisma.$queryRaw`SELECT 1`; response.json({ status: "ok", service: "mobiedoor-api", database: "ok" }); } catch (error) { next(error); }
+  try { await retryPrismaRead(() => prisma.$queryRaw`SELECT 1`); response.json({ status: "ok", service: "mobiedoor-api", database: "ok" }); } catch (error) { next(error); }
 });
 
 app.get("/products", async (request, response, next) => {
@@ -185,30 +204,42 @@ app.get("/products", async (request, response, next) => {
     }).parse(request.query);
     const where = { isPublished: true, ...(query.category && query.category !== "All devices" ? { category: query.category } : {}), ...(query.search ? { OR: [{ name: { contains: query.search } }, { brand: { contains: query.search } }, { model: { contains: query.search } }] } : {}) };
     const orderBy = query.sort === "price_asc" ? { priceInPaise: "asc" as const } : query.sort === "price_desc" ? { priceInPaise: "desc" as const } : { createdAt: "desc" as const };
-    const [products, total] = await prisma.$transaction([prisma.product.findMany({ where, select: publicProductSelect, orderBy, skip: (query.page - 1) * query.limit, take: query.limit }), prisma.product.count({ where })]);
+    const [products, total] = await retryPrismaRead(() => prisma.$transaction([
+      prisma.product.findMany({ where, select: publicProductSelect, orderBy, skip: (query.page - 1) * query.limit, take: query.limit }),
+      prisma.product.count({ where }),
+    ]));
     response.json({ data: products, meta: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) } });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (isTransientPrismaReadError(error)) response.setHeader("Cache-Control", "private, no-store");
+    next(error);
+  }
 });
 
 app.get("/products/:id", async (request, response, next) => {
   try {
     response.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
     const productId = getParam(request, "id");
-    const product = await prisma.product.findFirst({ where: { isPublished: true, OR: [{ id: productId }, { slug: productId }] }, select: publicProductSelect });
+    const product = await retryPrismaRead(() => prisma.product.findFirst({ where: { isPublished: true, OR: [{ id: productId }, { slug: productId }] }, select: publicProductSelect }));
     if (!product) { response.status(404).json({ error: { code: "NOT_FOUND", message: "Product not found." } }); return; }
     response.json({ data: product });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (isTransientPrismaReadError(error)) response.setHeader("Cache-Control", "private, no-store");
+    next(error);
+  }
 });
 
 app.get("/categories", async (_request, response, next) => {
   try {
     response.setHeader("Cache-Control", "public, max-age=30, s-maxage=60, stale-while-revalidate=300");
-    const [managed, legacy] = await prisma.$transaction([
+    const [managed, legacy] = await retryPrismaRead(() => prisma.$transaction([
       prisma.category.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { name: true } }),
       prisma.product.findMany({ where: { isPublished: true }, distinct: ["category"], orderBy: { category: "asc" }, select: { category: true } }),
-    ]);
+    ]));
     response.json({ data: [...new Set([...managed.map(row => row.name), ...legacy.map(row => row.category)])] });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (isTransientPrismaReadError(error)) response.setHeader("Cache-Control", "private, no-store");
+    next(error);
+  }
 });
 
 app.post("/enquiries", publicMutationLimiter, async (request, response, next) => {
@@ -812,6 +843,11 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
     return;
   }
   if (typeof error === "object" && error !== null && "statusCode" in error && (error as { statusCode?: number }).statusCode === 400) { response.status(400).json({ error: { code: "INVALID_JSON", message: "Request body must be valid JSON." } }); return; }
+  if (isTransientPrismaReadError(error)) {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.status(503).json({ error: { code: "SERVICE_UNAVAILABLE", message: "The live catalogue service is temporarily unavailable. Please try again shortly." } });
+    return;
+  }
   logger.error("Unhandled request error", error);
   response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Something went wrong while processing the request." } });
 });

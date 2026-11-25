@@ -1,7 +1,7 @@
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
-import { app, generateCloudinarySignature, getCloudinaryErrorDetails, isCloudinaryImageUrl, isProductInventoryHistoryConstraintError } from "./server.js";
+import { app, generateCloudinarySignature, getCloudinaryErrorDetails, isCloudinaryImageUrl, isProductInventoryHistoryConstraintError, isTransientPrismaReadError, retryPrismaRead } from "./server.js";
 import { config } from "./config.js";
 import { prisma } from "./lib/prisma.js";
 
@@ -145,6 +145,69 @@ describe("public API security and contracts", () => {
     const response = await request(app).get("/categories");
     expect(response.status).toBe(200);
     expect(response.body.data).toEqual(expect.any(Array));
+  });
+
+  it("classifies transient Prisma read failures and avoids exposing database details", async () => {
+    expect(isTransientPrismaReadError(new Prisma.PrismaClientKnownRequestError("pool timed out", {
+      code: "P2024",
+      clientVersion: "test",
+    }))).toBe(true);
+    expect(isTransientPrismaReadError(new Prisma.PrismaClientKnownRequestError("invalid input", {
+      code: "P2002",
+      clientVersion: "test",
+    }))).toBe(false);
+
+    const originalTransaction = prisma.$transaction;
+    const query = vi.spyOn(prisma, "$transaction").mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("database host detail that must stay private", {
+        code: "P2024",
+        clientVersion: "test",
+      }),
+    );
+    try {
+      const response = await request(app).get("/products?limit=12");
+      expect(response.status).toBe(503);
+      expect(response.body).toEqual({
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          message: "The live catalogue service is temporarily unavailable. Please try again shortly.",
+        },
+      });
+      expect(JSON.stringify(response.body)).not.toContain("database host");
+      expect(query).toHaveBeenCalledTimes(2);
+    } finally {
+      query.mockRestore();
+      Object.defineProperty(prisma, "$transaction", { configurable: true, writable: true, value: originalTransaction });
+    }
+  });
+
+  it("does not classify Rust panics or permanent Prisma errors as transient", () => {
+    expect(isTransientPrismaReadError(new Prisma.PrismaClientRustPanicError("engine panic", "test"))).toBe(false);
+    for (const code of ["P2002", "P2003", "P2012", "P2028"]) {
+      expect(isTransientPrismaReadError(new Prisma.PrismaClientKnownRequestError(code, {
+        code,
+        clientVersion: "test",
+      }))).toBe(false);
+    }
+  });
+
+  it("retries only confirmed temporary Prisma connection and timeout errors", async () => {
+    for (const code of ["P1001", "P1002", "P2024"]) {
+      const operation = vi.fn()
+        .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError(code, { code, clientVersion: "test" }))
+        .mockResolvedValueOnce("ok");
+      await expect(retryPrismaRead(operation)).resolves.toBe("ok");
+      expect(operation).toHaveBeenCalledTimes(2);
+    }
+
+    const permanent = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("authentication failed", {
+        code: "P1000",
+        clientVersion: "test",
+      }),
+    );
+    await expect(retryPrismaRead(permanent)).rejects.toMatchObject({ code: "P1000" });
+    expect(permanent).toHaveBeenCalledOnce();
   });
 
   it("rejects unauthenticated admin access", async () => {
