@@ -6,6 +6,11 @@ import { prisma } from "./lib/prisma.js";
 
 const SESSION_COOKIE = "mobiedoor_session";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const DUMMY_PASSWORD_HASH = "$2a$12$ji.ujpxp5kD1qJIGwhvRLOTOiphyWcZNZSxVVYfJzqujNAsMwwSX2";
+
+export function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 export const cookieAttributes = (isProduction = process.env.NODE_ENV === "production") =>
@@ -94,8 +99,8 @@ export async function hashPassword(password: string) {
   return bcrypt.hash(password, 12);
 }
 
-export async function verifyPassword(password: string, passwordHash: string) {
-  return bcrypt.compare(password, passwordHash);
+export async function verifyPassword(password: string, passwordHash?: string) {
+  return bcrypt.compare(password, passwordHash ?? DUMMY_PASSWORD_HASH);
 }
 
 export async function recordActivity(userId: string, action: string, entity: string, entityId?: string, metadata?: object) {

@@ -141,6 +141,37 @@ if (!testDatabaseUrl) {
       expect((await agent.get("/auth/me")).status).toBe(401);
     });
 
+    it("keeps simultaneous sessions for the same account independent", async () => {
+      const before = await prisma.session.count({ where: { userId: users.customer.id } });
+      const firstDevice = await login(users.customer.email);
+      const secondDevice = await login(users.customer.email);
+
+      expect(await prisma.session.count({ where: { userId: users.customer.id } })).toBe(before + 2);
+      expect((await firstDevice.get("/auth/me")).status).toBe(200);
+      expect((await secondDevice.get("/auth/me")).status).toBe(200);
+      expect((await firstDevice.post("/auth/logout")).status).toBe(204);
+      expect((await firstDevice.get("/auth/me")).status).toBe(401);
+      expect((await secondDevice.get("/auth/me")).status).toBe(200);
+    });
+
+    it("removes an expired persisted session when the user refreshes", async () => {
+      const previousSessionIds = new Set((await prisma.session.findMany({
+        where: { userId: users.customer.id },
+        select: { id: true },
+      })).map(session => session.id));
+      const agent = await login(users.customer.email);
+      const session = (await prisma.session.findMany({
+        where: { userId: users.customer.id },
+        select: { id: true },
+      })).find(candidate => !previousSessionIds.has(candidate.id));
+      expect(session).toBeDefined();
+      if (!session) throw new Error("Login did not create an independent session.");
+
+      await prisma.session.update({ where: { id: session.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      expect((await agent.get("/auth/me")).status).toBe(401);
+      expect(await prisma.session.findUnique({ where: { id: session.id } })).toBeNull();
+    });
+
     it("rejects inactive users before creating a session", async () => {
       const response = await request(app).post("/auth/login").send({ email: users.inactive.email, password });
       expect(response.status).toBe(403);

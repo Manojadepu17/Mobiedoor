@@ -1,4 +1,5 @@
 import type { Product } from "./main";
+import { isValidProductImageUrl } from "./image-url";
 
 export type CatalogueMeta = {
   page: number;
@@ -14,6 +15,27 @@ export type CatalogueEnvelope = {
 
 const conditions = new Set(["LIKE_NEW", "EXCELLENT", "GOOD", "FAIR"]);
 const availability = new Set(["IN_STOCK", "LOW_STOCK", "OUT_OF_STOCK", "DISCONTINUED"]);
+const approvedLocalCatalogueImages = new Set([
+  "/categories/accessories-photo.jpg",
+  "/categories/deals-phone.jpg",
+  "/categories/hero-phone.jpg",
+  "/categories/hero-smartphone.jpg",
+  "/categories/laptops-photo.jpg",
+  "/categories/mobiles-photo.jpg",
+  "/categories/smartwatches-photo.jpg",
+  "/categories/smartwatches.png",
+  "/categories/tablets-photo.jpg",
+  "/categories/trade-in-phone.jpg",
+  "/assets/promos/best-selling-android-phones.png",
+  "/assets/promos/best-selling-apple-phones.png",
+]);
+
+function isValidCatalogueImageUrl(value: unknown): value is string {
+  if (isValidProductImageUrl(value)) return true;
+  if (typeof value !== "string") return false;
+  return approvedLocalCatalogueImages.has(value)
+    || /^\/uploads\/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:avif|gif|jpe?g|png|webp)$/i.test(value);
+}
 
 export function isValidCatalogueMeta(value: unknown): value is CatalogueMeta {
   if (typeof value !== "object" || value === null) return false;
@@ -61,11 +83,7 @@ export function isValidCatalogueProduct(value: unknown): value is Product {
         && product.originalPriceInPaise > product.priceInPaise!))
     && (product.availability === undefined || availability.has(product.availability))
     && Array.isArray(product.imageUrls)
-    && product.imageUrls.every(image =>
-      typeof image === "string"
-      && (image.startsWith("/")
-        || /^https:\/\/res\.cloudinary\.com\//.test(image))
-    );
+    && product.imageUrls.every(isValidCatalogueImageUrl);
 }
 
 export function validateCatalogueEnvelope(value: unknown): CatalogueEnvelope | undefined {

@@ -54,9 +54,9 @@ The Vercel frontend sends production API requests through the same-origin `/api`
 
 Sessions are persisted in Prisma/MySQL and use an `HttpOnly` cookie at `/`. Local development uses `SameSite=Lax`; production uses `SameSite=None; Secure`. Production requires HTTPS. State-changing requests must include the configured frontend `Origin`; requests from other origins, or production requests without an origin, are rejected to protect cookie-authenticated operations from CSRF.
 
-The backend handles `SIGTERM` and `SIGINT`, stops accepting new requests, waits up to 10 seconds for active requests, disconnects Prisma, and then completes shutdown. Hosting platforms should send `SIGTERM` during graceful replacement. Rate limits currently use process memory; a shared store is required before running multiple backend instances.
+The backend handles `SIGTERM` and `SIGINT`, stops accepting new requests, waits up to 10 seconds for active requests, disconnects Prisma, and then completes shutdown. Hosting platforms should send `SIGTERM` during graceful replacement. Rate limits use express-rate-limit's process-local `MemoryStore`, which periodically expires inactive keys but has no hard key-count cap. This is retained for the current single-instance Render Free deployment; assess memory growth under unusually high unique-IP traffic, and use a shared store before running multiple backend instances.
 
-The backend uses Express client-IP resolution for rate limiting and applies `TRUST_PROXY`; Render forwards the client IP through its reverse proxy, so set the value to `1` there. Local development defaults to not trusting forwarded headers. Keep the backend inaccessible except through the intended proxy where possible.
+The backend uses Express client-IP resolution for rate limiting and applies `TRUST_PROXY`; the current Render setting is `1`, while local development defaults to not trusting forwarded headers. This setting alone does not verify how the complete Vercel-to-Render forwarded-header chain is sanitized or appended. Independently verify that chain before treating the resolved IP as authoritative, and keep the backend inaccessible except through the intended proxy where possible.
 
 ## Frontend hosting and SPA routing
 
@@ -122,7 +122,9 @@ or source control. Apply the `20261107173000_add_initial_setup_state` migration 
 using the page. A successful setup creates one Founder account and permanently closes
 the setup flow. Existing Founder/Admin accounts are never modified.
 
-Login, public enquiry mutations, and authenticated admin mutations are rate-limited. The backend uses Helmet, a configured CORS origin, explicit origin checks for state-changing requests, request-body limits, Zod validation, and structured authorization errors. Admin mutations require a valid session and role. Expired sessions are cleaned up hourly; cleanup only deletes sessions whose expiry is in the past.
+Login uses a 60-request/minute IP volume limit that retains only invalid-credential and rate-limited responses, plus a 20-invalid-credential/15-minute IP limit. Successful logins, validation failures, and server failures do not consume those counters. Registration is limited to 30 valid attempts per 15 minutes/IP; validation and server failures are excluded, while duplicate-email conflicts count. These IP-based limits can still affect users sharing a busy network. There are no account-specific lockouts. Unknown accounts receive dummy bcrypt verification to reduce account-enumeration timing differences.
+
+Public enquiry mutations and authenticated admin mutations are rate-limited. The backend uses Helmet, a configured CORS origin, explicit origin checks for state-changing requests, request-body limits, Zod validation, and structured authorization errors. Admin mutations require a valid session and role. Expired sessions are cleaned up hourly; cleanup only deletes sessions whose expiry is in the past.
 
 ## Admin API
 

@@ -11,7 +11,7 @@ import { imageSize } from "image-size";
 import { z } from "zod";
 import { Prisma, ProductAvailability, UserRole } from "@prisma/client";
 import { prisma } from "./lib/prisma.js";
-import { cleanupExpiredSessions, createSession, createSessionInTransaction, destroySession, hashPassword, recordActivity, requireAuth, requireRoles, setSessionCookie, verifyPassword } from "./auth.js";
+import { cleanupExpiredSessions, createSession, createSessionInTransaction, destroySession, hashPassword, normalizeEmail, recordActivity, requireAuth, requireRoles, setSessionCookie, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
 
@@ -63,8 +63,10 @@ export function isProductInventoryHistoryConstraintError(error: unknown) {
 }
 
 export function isTransientPrismaReadError(error: unknown) {
-  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
-  return ["P1001", "P1002", "P2024"].includes(error.code);
+  if (error instanceof Prisma.PrismaClientInitializationError) {
+    return error.errorCode === "P1001" || error.errorCode === "P1002";
+  }
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2024";
 }
 
 export async function retryPrismaRead<T>(operation: () => Promise<T>, attempts = 2): Promise<T> {
@@ -109,17 +111,18 @@ const partnershipSchema = z.object({
   email: z.string().trim().email().max(254), phoneNumber: z.string().trim().min(7).max(25),
   city: z.string().trim().min(2).max(100), message: z.string().trim().min(10).max(5000),
 });
-const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(10).max(200) });
+const normalizedEmailSchema = z.string().trim().email().max(254).transform(normalizeEmail);
+const loginSchema = z.object({ email: normalizedEmailSchema, password: z.string().min(10).max(200) });
 const setupSchema = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().trim().email().max(254).transform(value => value.toLowerCase()),
+  email: normalizedEmailSchema,
   password: z.string().min(10).max(200),
   confirmPassword: z.string().min(10).max(200),
   setupSecret: z.string().min(1).max(500),
 }).refine(input => input.password === input.confirmPassword, { message: "Passwords do not match.", path: ["confirmPassword"] });
 const registrationSchema = z.object({
   name: z.string().trim().min(2).max(100),
-  email: z.string().trim().email().max(254).transform(value => value.toLowerCase()),
+  email: normalizedEmailSchema,
   password: z.string().min(10).max(200),
   confirmPassword: z.string().min(10).max(200),
 }).refine(input => input.password === input.confirmPassword, { message: "Passwords do not match.", path: ["confirmPassword"] });
@@ -171,16 +174,34 @@ app.use((request, response, next) => {
   next();
 });
 
-const publicMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false, skipSuccessfulRequests: true, message: { error: { code: "RATE_LIMITED", message: "Too many submissions. Please try again later." } } });
-const loginLimiter = rateLimit({
+const loginRateLimitHandler = (_request: express.Request, response: express.Response) => response.status(429).json({
+  error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Please wait before trying again." },
+});
+const loginRequestLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_request, response) => response.statusCode !== 401 && response.statusCode !== 429,
+  handler: loginRateLimitHandler,
+});
+const loginFailureLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
   standardHeaders: "draft-7",
   legacyHeaders: false,
+  handler: loginRateLimitHandler,
+});
+const publicMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false, message: { error: { code: "RATE_LIMITED", message: "Too many submissions. Please try again later." } } });
+const registrationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
   skipSuccessfulRequests: true,
-  handler: (_request, response) => response.status(429).json({
-    error: { code: "RATE_LIMITED", message: "Too many sign-in attempts. Please wait before trying again." },
-  }),
+  requestWasSuccessful: (_request, response) => response.statusCode === 400 || response.statusCode >= 500,
+  message: { error: { code: "RATE_LIMITED", message: "Too many registration attempts. Please try again later." } },
 });
 const setupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: "draft-7", legacyHeaders: false, skipSuccessfulRequests: true });
 const adminMutationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 120, standardHeaders: "draft-7", legacyHeaders: false, message: { error: { code: "RATE_LIMITED", message: "Too many admin changes. Please try again later." } } });
@@ -252,11 +273,18 @@ app.post("/partnerships", publicMutationLimiter, async (request, response, next)
   try { const data = await prisma.partnershipEnquiry.create({ data: partnershipSchema.parse(request.body), select: { id: true, createdAt: true } }); response.status(201).json({ data, message: "Your partnership enquiry has been received." }); } catch (error) { next(error); }
 });
 
-app.post("/auth/login", loginLimiter, async (request, response, next) => {
+app.post("/auth/login", loginRequestLimiter, async (request, response, next) => {
   try {
     const { email, password } = loginSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !(await verifyPassword(password, user.passwordHash))) { response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Email or password is incorrect." } }); return; }
+    const passwordMatches = await verifyPassword(password, user?.passwordHash);
+    if (!user || !passwordMatches) {
+      loginFailureLimiter(request, response, error => {
+        if (error) { next(error); return; }
+        response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Email or password is incorrect." } });
+      });
+      return;
+    }
     if (!user.isActive) { response.status(403).json({ error: { code: "ACCOUNT_INACTIVE", message: "This account is inactive. Contact an administrator for assistance." } }); return; }
     const authUser = { id: user.id, name: user.name, email: user.email, role: user.role };
     await createSession(authUser, response);
@@ -307,7 +335,7 @@ app.post("/auth/setup", setupLimiter, async (request, response, next) => {
     next(error);
   }
 });
-app.post("/auth/register", publicMutationLimiter, async (request, response, next) => {
+app.post("/auth/register", registrationLimiter, async (request, response, next) => {
   try {
     const input = registrationSchema.parse(request.body);
     const passwordHash = await hashPassword(input.password);
@@ -836,7 +864,7 @@ function secretsMatch(provided: string, expected: string) {
   return timingSafeEqual(providedHash, expectedHash);
 }
 
-app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
+app.use((error: unknown, request: express.Request, response: express.Response, _next: express.NextFunction) => {
   if (error instanceof z.ZodError) { response.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Please check the submitted details.", details: error.flatten().fieldErrors } }); return; }
   if (error instanceof multer.MulterError) {
     response.status(400).json({ error: { code: error.code === "LIMIT_FILE_SIZE" ? "IMAGE_TOO_LARGE" : "IMAGE_UPLOAD_INVALID", message: error.code === "LIMIT_FILE_SIZE" ? "Images must be 8MB or smaller." : "The image upload is invalid." } });
@@ -845,7 +873,10 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
   if (typeof error === "object" && error !== null && "statusCode" in error && (error as { statusCode?: number }).statusCode === 400) { response.status(400).json({ error: { code: "INVALID_JSON", message: "Request body must be valid JSON." } }); return; }
   if (isTransientPrismaReadError(error)) {
     response.setHeader("Cache-Control", "private, no-store");
-    response.status(503).json({ error: { code: "SERVICE_UNAVAILABLE", message: "The live catalogue service is temporarily unavailable. Please try again shortly." } });
+    const message = request.path.startsWith("/auth/")
+      ? "The authentication service is temporarily unavailable. Please try again shortly."
+      : "The live catalogue service is temporarily unavailable. Please try again shortly.";
+    response.status(503).json({ error: { code: "SERVICE_UNAVAILABLE", message } });
     return;
   }
   logger.error("Unhandled request error", error);

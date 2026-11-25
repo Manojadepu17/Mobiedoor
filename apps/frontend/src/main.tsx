@@ -21,7 +21,15 @@ import { CatalogueCacheStatus, CataloguePagination, CatalogueSkeletonGrid, Catal
 import { VerifiedBadge } from "./verified-badge";
 import { CATEGORY_IMAGES, HERO_IMAGES } from "./config/homepageImages";
 import { optimizedProductImageUrl, PRODUCT_IMAGE_FALLBACK } from "./image-url";
-import { apiRequest, ApiError, describeApiError, getApiErrorStatus, type ApiEnvelope } from "./api-client";
+import { apiRequest, describeApiError, type ApiEnvelope } from "./api-client";
+import {
+  AUTH_USER_QUERY_KEY,
+  authenticationErrorMessage,
+  clearAuthenticatedQueryCache,
+  clearPrivateDataAfterUnauthorized,
+  resolveAuthQueryState,
+  runAuthSubmission,
+} from "./auth-reliability";
 import {
   catalogueRetryCount,
   catalogueRetryDelay,
@@ -50,6 +58,28 @@ export type Product = {
 };
 
 type AuthUser = { id: string; name: string; email: string; role: "FOUNDER" | "ADMIN" | "STAFF" | "CUSTOMER" };
+
+function useAuthUserQuery() {
+  return useQuery<AuthUser>({
+    queryKey: AUTH_USER_QUERY_KEY,
+    queryFn: () => apiRequest<AuthUser>("/auth/me").then(result => result.data),
+    retry: false,
+  });
+}
+
+function AuthUnavailable({ onRetry }: { onRetry: () => void }) {
+  return <div className="admin-loading" role="alert">
+    <p>Your account status could not be verified. Your session has not been signed out.</p>
+    <button className="button primary" type="button" onClick={onRetry}>Try again</button>
+  </div>;
+}
+
+function AuthVerificationNotice({ onRetry }: { onRetry: () => void }) {
+  return <div className="form-status" role="status">
+    <span>Your session could not be rechecked. You can continue with the information already loaded.</span>
+    <button className="small-action" type="button" onClick={onRetry}>Try again</button>
+  </div>;
+}
 
 function createCroppedImage(source: string, crop: Area | undefined, rotation: number) {
   return new Promise<Blob>((resolve, reject) => {
@@ -168,9 +198,13 @@ function Header() {
     queryKey: ["categories"],
     queryFn: () => apiRequest<string[]>("/categories").then(result => result.data),
   });
-  const me = useQuery<AuthUser>({ queryKey: ["auth-me"], queryFn: () => apiRequest<AuthUser>("/auth/me").then(result => result.data), retry: false });
-  const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { queryClient.clear(); navigate("/", { replace: true }); } });
+  const me = useAuthUserQuery();
+  const authState = resolveAuthQueryState(me);
+  const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { clearAuthenticatedQueryCache(queryClient); navigate("/", { replace: true }); } });
   const links = [["Home", "/"]];
+  useEffect(() => {
+    if (authState.status === "unauthenticated") clearPrivateDataAfterUnauthorized(me.error, queryClient);
+  }, [authState.status, me.error]);
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -203,7 +237,7 @@ function Header() {
       </div>
       <form className="nav-search" role="search" onSubmit={submitSearch}><Search size={16} aria-hidden="true" /><input value={search} onChange={event => setSearch(event.target.value)} aria-label="Search devices" placeholder="Search devices" /><button type="submit" aria-label="Submit device search"><ArrowRight size={15} /></button></form>
       <Link className="nav-cta" to="/trade-in" onClick={() => setOpen(false)}>Trade in <ArrowRight size={15} /></Link>
-      {me.data ? <><Link className="nav-account" to={me.data.role === "CUSTOMER" ? "/account" : me.data.role === "STAFF" ? "/staff" : "/admin"} onClick={() => setOpen(false)}>{me.data.name} <LayoutDashboard size={15} /></Link><button className="nav-logout" type="button" onClick={() => logout.mutate()} disabled={logout.isPending}>{logout.isPending ? "Signing out..." : "Logout"}</button></> : <><Link className="nav-auth" to="/login" onClick={() => setOpen(false)}>Sign In</Link><Link className="nav-cta" to="/register" onClick={() => setOpen(false)}>Register <ArrowRight size={15} /></Link></>}
+      {authState.status === "authenticated" ? <><Link className="nav-account" to={authState.user.role === "CUSTOMER" ? "/account" : authState.user.role === "STAFF" ? "/staff" : "/admin"} onClick={() => setOpen(false)}>{authState.user.name} <LayoutDashboard size={15} /></Link><button className="nav-logout" type="button" onClick={() => logout.mutate()} disabled={logout.isPending}>{logout.isPending ? "Signing out..." : "Logout"}</button></> : authState.status === "unavailable" ? <span className="admin-muted" role="status">Account status temporarily unavailable</span> : authState.status === "unauthenticated" ? <><Link className="nav-auth" to="/login" onClick={() => setOpen(false)}>Sign In</Link><Link className="nav-cta" to="/register" onClick={() => setOpen(false)}>Register <ArrowRight size={15} /></Link></> : null}
     </nav>
     <button className="menu-toggle" type="button" aria-controls="primary-navigation" aria-expanded={open} onClick={() => setOpen(!open)} aria-label={open ? "Close menu" : "Open menu"}>{open ? <X /> : <Menu />}</button>
   </div></header>;
@@ -471,7 +505,7 @@ function BrandDiscovery({ products }: { products: Product[] }) {
             <small>{count} {count === 1 ? "device" : "devices"} in the catalogue</small>
             <span className="brand-discovery-cta">Explore {name}</span>
             {sampleProducts.length > 0 && <span className="brand-discovery-samples" aria-hidden="true">
-              {sampleProducts.map(product => <img src={product.imageUrls[0]} alt="" loading="lazy" decoding="async" key={product.id} />)}
+              {sampleProducts.map(product => <FallbackImage src={product.imageUrls[0]} alt="" key={product.id} />)}
             </span>}
             <ArrowRight size={17} aria-hidden="true" />
           </Link>;
@@ -982,6 +1016,7 @@ function HowItWorks() { const steps: Array<{ title: string; text: string; icon: 
 function Login() {
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const submissionLock = useRef(false);
   const location = useLocation();
   const navigate = useNavigate();
   const sessionMessage = (location.state as { message?: string } | null)?.message;
@@ -990,27 +1025,18 @@ function Login() {
     mutationFn: (payload: { email: string; password: string }) => {
       return apiRequest<AuthUser>("/auth/login", { method: "POST", body: JSON.stringify(payload) });
     },
-    onSuccess: ({ data }) => { queryClient.setQueryData(["auth-me"], data); navigate(data.role === "CUSTOMER" ? "/account" : data.role === "STAFF" ? "/staff" : "/admin", { replace: true }); },
-    onError: (loginError: unknown) => {
-      const status = getApiErrorStatus(loginError);
-      if (status === 429) {
-        const retryAfter = loginError instanceof ApiError ? loginError.retryAfterSeconds : undefined;
-        setError(retryAfter ? `Too many sign-in attempts. Please wait ${retryAfter} seconds and try again.` : "Too many sign-in attempts. Please wait before trying again.");
-      } else if (status === 401) setError("Email or password is incorrect.");
-      else if (status === 403) setError(loginError instanceof Error ? loginError.message : "This account cannot sign in.");
-      else if (status === 500) setError("The sign-in service is temporarily unavailable. Please try again.");
-      else if (loginError instanceof TypeError) setError("Could not reach the sign-in service. Check your connection and try again.");
-      else setError(loginError instanceof Error ? loginError.message : "Sign-in could not be completed.");
-    },
+    retry: false,
+    onSuccess: ({ data }) => { clearAuthenticatedQueryCache(queryClient); queryClient.setQueryData(AUTH_USER_QUERY_KEY, data); navigate(data.role === "CUSTOMER" ? "/account" : data.role === "STAFF" ? "/staff" : "/admin", { replace: true }); },
   });
-  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">MobieDoor account</p><h1>Welcome back.</h1><p className="admin-muted">Sign in to continue to your MobieDoor account.</p>{sessionMessage && <p className="form-status" role="status">{sessionMessage}</p>}<form className="enquiry-form" onSubmit={event => { event.preventDefault(); if (mutation.isPending) return; setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as { email: string; password: string }; mutation.mutate(values); }}><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<div className="password-field"><input name="password" type={showPassword ? "text" : "password"} required minLength={10} autoComplete="current-password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button></div></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Signing in..." : "Sign in"}<ArrowRight size={16} /></button><p className="admin-muted">New to MobieDoor? <Link to="/register">Create a customer account</Link>.</p>{setupStatus.data?.available && <p className="admin-muted"><Link to="/setup">Initial administrator setup</Link></p>}{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
+  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">MobieDoor account</p><h1>Welcome back.</h1><p className="admin-muted">Sign in to continue to your MobieDoor account.</p>{sessionMessage && <p className="form-status" role="status">{sessionMessage}</p>}<form className="enquiry-form" onSubmit={event => { event.preventDefault(); if (mutation.isPending) return; setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as { email: string; password: string }; void runAuthSubmission(submissionLock, () => mutation.mutateAsync(values)).catch(loginError => setError(authenticationErrorMessage(loginError, "login"))); }}><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<div className="password-field"><input name="password" type={showPassword ? "text" : "password"} required minLength={10} autoComplete="current-password" /><button type="button" className="password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? "Hide" : "Show"}</button></div></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Signing in..." : "Sign in"}<ArrowRight size={16} /></button><p className="admin-muted">New to MobieDoor? <Link to="/register">Create a customer account</Link>.</p>{setupStatus.data?.available && <p className="admin-muted"><Link to="/setup">Initial administrator setup</Link></p>}{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
 }
 
 function Register() {
   const navigate = useNavigate();
   const [error, setError] = useState("");
-  const mutation = useMutation({ mutationFn: (payload: Record<string, string>) => apiRequest<AuthUser>("/auth/register", { method: "POST", body: JSON.stringify(payload) }), onSuccess: ({ data }) => { queryClient.setQueryData(["auth-me"], data); navigate("/account", { replace: true }); }, onError: (registrationError: Error) => setError(registrationError.message) });
-  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">Join MobieDoor</p><h1>Create your account.</h1><p className="admin-muted">Customer accounts make it easier to follow your MobieDoor journey.</p><form className="enquiry-form" onSubmit={event => { event.preventDefault(); setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as Record<string, string>; if (values.password !== values.confirmPassword) { setError("Passwords do not match."); return; } mutation.mutate(values); }}><label>Name<input name="name" required minLength={2} autoComplete="name" /></label><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<input name="password" type="password" required minLength={10} autoComplete="new-password" /></label><label>Confirm password<input name="confirmPassword" type="password" required minLength={10} autoComplete="new-password" /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Creating account..." : "Create account"}<ArrowRight size={16} /></button><p className="admin-muted">Already registered? <Link to="/login">Sign in</Link>.</p>{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
+  const submissionLock = useRef(false);
+  const mutation = useMutation({ mutationFn: (payload: Record<string, string>) => apiRequest<AuthUser>("/auth/register", { method: "POST", body: JSON.stringify(payload) }), retry: false, onSuccess: ({ data }) => { clearAuthenticatedQueryCache(queryClient); queryClient.setQueryData(AUTH_USER_QUERY_KEY, data); navigate("/account", { replace: true }); } });
+  return <div className="admin-login"><div className="admin-login-card auth-card"><Logo /><p className="eyebrow">Join MobieDoor</p><h1>Create your account.</h1><p className="admin-muted">Customer accounts make it easier to follow your MobieDoor journey.</p><form className="enquiry-form" onSubmit={event => { event.preventDefault(); setError(""); const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as Record<string, string>; if (values.password !== values.confirmPassword) { setError("Passwords do not match."); return; } if (mutation.isPending) return; void runAuthSubmission(submissionLock, () => mutation.mutateAsync(values)).catch(registrationError => setError(authenticationErrorMessage(registrationError, "registration"))); }}><label>Name<input name="name" required minLength={2} autoComplete="name" /></label><label>Email address<input name="email" type="email" required autoComplete="email" /></label><label>Password<input name="password" type="password" required minLength={10} autoComplete="new-password" /></label><label>Confirm password<input name="confirmPassword" type="password" required minLength={10} autoComplete="new-password" /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Creating account..." : "Create account"}<ArrowRight size={16} /></button><p className="admin-muted">Already registered? <Link to="/login">Sign in</Link>.</p>{error && <p className="form-status form-error" role="alert">{error}</p>}</form></div></div>;
 }
 
 function InitialSetup() {
@@ -1024,10 +1050,16 @@ function InitialSetup() {
 }
 
 function Account() {
-  const me = useQuery<AuthUser>({ queryKey: ["auth-me"], queryFn: () => apiRequest<AuthUser>("/auth/me").then(result => result.data), retry: false });
-  if (me.isLoading) return <div className="admin-loading">Checking your session...</div>;
-  if (me.isError || me.data?.role !== "CUSTOMER") return <Navigate to="/login" replace />;
-  return <Layout><PageIntro eyebrow="Your account" title={`Welcome, ${me.data.name}.`} text="Your MobieDoor customer account is ready. Browse verified devices or get in touch with our team." /><section className="section"><div className="container"><Button to="/products">Shop devices</Button></div></section></Layout>;
+  const me = useAuthUserQuery();
+  const authState = resolveAuthQueryState(me);
+  useEffect(() => {
+    if (authState.status === "unauthenticated") clearPrivateDataAfterUnauthorized(me.error, queryClient);
+  }, [authState.status, me.error]);
+  if (authState.status === "loading") return <div className="admin-loading">Checking your session...</div>;
+  if (authState.status === "unauthenticated") return <Navigate to="/login" replace />;
+  if (authState.status === "unavailable") return <AuthUnavailable onRetry={() => { void me.refetch(); }} />;
+  if (authState.user.role !== "CUSTOMER") return <Navigate to="/login" replace />;
+  return <Layout>{authState.verificationFailed && <AuthVerificationNotice onRetry={() => { void me.refetch(); }} />}<PageIntro eyebrow="Your account" title={`Welcome, ${authState.user.name}.`} text="Your MobieDoor customer account is ready. Browse verified devices or get in touch with our team." /><section className="section"><div className="container"><Button to="/products">Shop devices</Button></div></section></Layout>;
 }
 
 type AdminEnquiry = { id: string; status: string; adminNotes?: string | null; createdAt: string; name?: string; customerName?: string; companyName?: string; email?: string; message?: string; additionalDescription?: string | null };
@@ -1168,28 +1200,29 @@ function SettingsPanel({ settings, onDelete }: { settings: Array<{ key: string; 
 
 function AdminDashboard() {
   const navigate = useNavigate();
-  const me = useQuery<{ id: string; name: string; email: string; role: string }>({ queryKey: ["admin-me"], queryFn: () => apiRequest<{ id: string; name: string; email: string; role: string }>("/auth/me").then(result => result.data), retry: false });
-  const dashboard = useQuery<{ totalProducts: number; publishedProducts: number; inventoryUnits: number; newContacts: number; newTradeIns: number; newPartnerships: number }>({ queryKey: ["admin-dashboard"], queryFn: () => apiRequest<{ totalProducts: number; publishedProducts: number; inventoryUnits: number; newContacts: number; newTradeIns: number; newPartnerships: number }>("/admin/dashboard").then(result => result.data), enabled: me.isSuccess });
-  const products = useQuery<Product[]>({ queryKey: ["admin-products"], queryFn: () => apiRequest<Product[]>("/admin/products").then(result => result.data), enabled: me.isSuccess });
-  const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { queryClient.clear(); navigate("/login", { replace: true }); } });
+  const me = useAuthUserQuery();
+  const authState = resolveAuthQueryState(me);
+  const dashboard = useQuery<{ totalProducts: number; publishedProducts: number; inventoryUnits: number; newContacts: number; newTradeIns: number; newPartnerships: number }>({ queryKey: ["admin-dashboard"], queryFn: () => apiRequest<{ totalProducts: number; publishedProducts: number; inventoryUnits: number; newContacts: number; newTradeIns: number; newPartnerships: number }>("/admin/dashboard").then(result => result.data), enabled: authState.status === "authenticated" });
+  const products = useQuery<Product[]>({ queryKey: ["admin-products"], queryFn: () => apiRequest<Product[]>("/admin/products").then(result => result.data), enabled: authState.status === "authenticated" });
+  const logout = useMutation({ mutationFn: () => apiRequest<null>("/auth/logout", { method: "POST" }), onSuccess: () => { clearAuthenticatedQueryCache(queryClient); navigate("/login", { replace: true }); } });
   const removeProduct = useMutation({ mutationFn: (id: string) => apiRequest<null>(`/admin/products/${id}`, { method: "DELETE" }), onSuccess: () => products.refetch() });
   const publishProduct = useMutation({ mutationFn: ({ id, isPublished }: { id: string; isPublished: boolean }) => apiRequest(`/admin/products/${id}/publish`, { method: "PATCH", body: JSON.stringify({ isPublished }) }), onSuccess: () => products.refetch() });
   useEffect(() => {
-    if (me.isError) queryClient.clear();
-  }, [me.isError]);
-  if (me.isLoading) return <div className="admin-loading">Checking secure session...</div>;
-  if (me.isError) {
-    const message = me.error instanceof ApiError && me.error.status === 401 ? "Your session has expired. Please sign in again." : "We could not verify your session.";
-    return <Navigate to="/login" replace state={{ message }} />;
-  }
-  if (me.data?.role === "CUSTOMER") return <Navigate to="/account" replace />;
+    if (authState.status === "unauthenticated") clearPrivateDataAfterUnauthorized(me.error, queryClient);
+  }, [authState.status, me.error]);
+  if (authState.status === "loading") return <div className="admin-loading">Checking secure session...</div>;
+  if (authState.status === "unauthenticated") return <Navigate to="/login" replace state={{ message: "Your session has expired. Please sign in again." }} />;
+  if (authState.status === "unavailable") return <AuthUnavailable onRetry={() => { void me.refetch(); }} />;
+  if (authState.user.role === "CUSTOMER") return <Navigate to="/account" replace />;
+  const currentUser = authState.user;
   const stats = dashboard.data;
-  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><div className="admin-user"><span>{me.data?.name.slice(0, 1)}</span><div><strong>{me.data?.name}</strong><small>{me.data?.role}</small></div></div><nav><NavLink to="/admin" end><LayoutDashboard size={17} /> Overview</NavLink><a href="#products"><PackageCheck size={17} /> Products</a><a href="#operations"><CircleHelp size={17} /> Operations</a>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <a href="#operations"><Users size={17} /> Management</a>}</nav><button className="admin-logout" disabled={logout.isPending} onClick={() => logout.mutate()}><LogOut size={17} /> {logout.isPending ? "Signing out..." : "Sign out"}</button></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">MobieDoor operations</p><h1>Hello, {me.data?.name}.</h1></div><span className="secure-badge"><ShieldCheck size={15} /> Secure workspace</span></div>{dashboard.isLoading && <div className="admin-panel"><p className="admin-muted">Loading dashboard data...</p></div>}{dashboard.isError && <div className="admin-panel form-status form-error" role="alert">Dashboard data could not be loaded. Please refresh or sign in again.</div>}{!dashboard.isLoading && !dashboard.isError && <><div className="admin-stats">{[["Total products", stats?.totalProducts ?? 0], ["Published", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["New contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="admin-stat" key={label as string}><span>{label}</span><strong>{value}</strong></div>)}</div><section className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Live overview</p><h2>Business signals</h2></div></div><div className="admin-chart">{[["Published products", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["Contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="chart-row" key={label as string}><span>{label}</span><div className="chart-track"><i style={{ width: `${Math.min(100, Number(value) === 0 ? 0 : Math.max(8, Number(value) / Math.max(1, Number(stats?.inventoryUnits ?? 1)) * 100))}%` }} /></div><strong>{value}</strong></div>)}</div></section><section id="products" className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Catalogue</p><h2>Product inventory</h2></div>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <Button to="/admin/products/new"><Plus size={16} /> Add product</Button>}</div>{products.isLoading ? <p className="admin-muted">Loading products...</p> : products.isError ? <p className="form-status form-error" role="alert">Products could not be loaded.</p> : products.data?.length ? <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Status</span><span>Action</span></div>{products.data.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand} · {product.condition.replace("_", " ")}</small></span><span>{product.sku ?? "—"}</span><span>{product.stockQuantity}</span><span className={product.isPublished ? "status-live" : "status-draft"}>{product.isPublished ? "Published" : "Draft"}</span><span>{(me.data?.role === "ADMIN" || me.data?.role === "FOUNDER") && <><Link className="small-action" to={`/admin/products/${product.id}/edit`}>Edit</Link><button type="button" className="small-action" onClick={() => publishProduct.mutate({ id: product.id, isPublished: !product.isPublished })}>{product.isPublished ? "Unpublish" : "Publish"}</button><button type="button" className="icon-button" title="Delete product" onClick={() => { if (window.confirm("Delete this product?")) removeProduct.mutate(product.id); }}><Trash2 size={16} /></button></>}</span></div>)}</div> : <div className="admin-empty">No products have been created yet.</div>}</section><div id="operations"><AdminOperations canManage={me.data?.role === "ADMIN" || me.data?.role === "FOUNDER"} /></div></>}</main></div>;
+  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><div className="admin-user"><span>{currentUser.name.slice(0, 1)}</span><div><strong>{currentUser.name}</strong><small>{currentUser.role}</small></div></div><nav><NavLink to="/admin" end><LayoutDashboard size={17} /> Overview</NavLink><a href="#products"><PackageCheck size={17} /> Products</a><a href="#operations"><CircleHelp size={17} /> Operations</a>{(currentUser.role === "ADMIN" || currentUser.role === "FOUNDER") && <a href="#operations"><Users size={17} /> Management</a>}</nav><button className="admin-logout" disabled={logout.isPending} onClick={() => logout.mutate()}><LogOut size={17} /> {logout.isPending ? "Signing out..." : "Sign out"}</button></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">MobieDoor operations</p><h1>Hello, {currentUser.name}.</h1></div><span className="secure-badge"><ShieldCheck size={15} /> Secure workspace</span></div>{authState.verificationFailed && <AuthVerificationNotice onRetry={() => { void me.refetch(); }} />}{dashboard.isLoading && <div className="admin-panel"><p className="admin-muted">Loading dashboard data...</p></div>}{dashboard.isError && <div className="admin-panel form-status form-error" role="alert">Dashboard data could not be loaded. Please refresh or sign in again.</div>}{!dashboard.isLoading && !dashboard.isError && <><div className="admin-stats">{[["Total products", stats?.totalProducts ?? 0], ["Published", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["New contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="admin-stat" key={label as string}><span>{label}</span><strong>{value}</strong></div>)}</div><section className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Live overview</p><h2>Business signals</h2></div></div><div className="admin-chart">{[["Published products", stats?.publishedProducts ?? 0], ["Inventory units", stats?.inventoryUnits ?? 0], ["Contact enquiries", stats?.newContacts ?? 0], ["Trade-in requests", stats?.newTradeIns ?? 0], ["Partnership requests", stats?.newPartnerships ?? 0]].map(([label, value]) => <div className="chart-row" key={label as string}><span>{label}</span><div className="chart-track"><i style={{ width: `${Math.min(100, Number(value) === 0 ? 0 : Math.max(8, Number(value) / Math.max(1, Number(stats?.inventoryUnits ?? 1)) * 100))}%` }} /></div><strong>{value}</strong></div>)}</div></section><section id="products" className="admin-panel"><div className="admin-panel-heading"><div><p className="eyebrow">Catalogue</p><h2>Product inventory</h2></div>{(currentUser.role === "ADMIN" || currentUser.role === "FOUNDER") && <Button to="/admin/products/new"><Plus size={16} /> Add product</Button>}</div>{products.isLoading ? <p className="admin-muted">Loading products...</p> : products.isError ? <p className="form-status form-error" role="alert">Products could not be loaded.</p> : products.data?.length ? <div className="admin-table"><div className="admin-table-row admin-table-head"><span>Product</span><span>SKU</span><span>Stock</span><span>Status</span><span>Action</span></div>{products.data.map(product => <div className="admin-table-row" key={product.id}><span><strong>{product.name}</strong><small>{product.brand} · {product.condition.replace("_", " ")}</small></span><span>{product.sku ?? "—"}</span><span>{product.stockQuantity}</span><span className={product.isPublished ? "status-live" : "status-draft"}>{product.isPublished ? "Published" : "Draft"}</span><span>{(currentUser.role === "ADMIN" || currentUser.role === "FOUNDER") && <><Link className="small-action" to={`/admin/products/${product.id}/edit`}>Edit</Link><button type="button" className="small-action" onClick={() => publishProduct.mutate({ id: product.id, isPublished: !product.isPublished })}>{product.isPublished ? "Unpublish" : "Publish"}</button><button type="button" className="icon-button" title="Delete product" onClick={() => { if (window.confirm("Delete this product?")) removeProduct.mutate(product.id); }}><Trash2 size={16} /></button></>}</span></div>)}</div> : <div className="admin-empty">No products have been created yet.</div>}</section><div id="operations"><AdminOperations canManage={currentUser.role === "ADMIN" || currentUser.role === "FOUNDER"} /></div></>}</main></div>;
 }
 
 function AdminProductForm({ productId }: { productId?: string }) {
   const navigate = useNavigate();
-  const me = useQuery<{ role: string }>({ queryKey: ["admin-product-auth"], queryFn: () => apiRequest<{ role: string }>("/auth/me").then(result => result.data), retry: false });
+  const me = useAuthUserQuery();
+  const authState = resolveAuthQueryState(me);
   const existingList = useQuery<Product[]>({ queryKey: ["admin-products-edit"], queryFn: () => apiRequest<Product[]>("/admin/products").then(result => result.data), enabled: Boolean(productId) });
   const existing = productId ? existingList.data?.find(item => item.id === productId) : undefined;
   const [uploadedImage, setUploadedImage] = useState<string | undefined>();
@@ -1210,10 +1243,14 @@ function AdminProductForm({ productId }: { productId?: string }) {
     const payload = { ...productValues, ...prices, ...(!productId ? { stockQuantity: Number(values.stockQuantity) } : {}), warrantyMonths: values.warrantyMonths ? Number(values.warrantyMonths) : undefined, imageUrls, specifications: {} };
     mutation.mutate(payload);
   };
-  if (me.isLoading) return <div className="admin-loading">Checking secure session...</div>;
-  if (me.isError) return <Navigate to="/admin/login" replace />;
-  if (me.data?.role !== "ADMIN" && me.data?.role !== "FOUNDER") return <Navigate to="/admin" replace />;
-  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><NavLink to="/admin">← Back to dashboard</NavLink></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">Catalogue</p><h1>{productId ? "Edit product." : "Add a product."}</h1></div></div>{productId && existingList.isLoading ? <p className="admin-muted">Loading product...</p> : <form className="admin-product-form" onSubmit={submit}><div className="form-row"><label>Product name<input name="name" required defaultValue={existing?.name} /></label><label>SKU<input name="sku" required defaultValue={existing?.sku} /></label></div><div className="form-row"><label>Brand<input name="brand" required defaultValue={existing?.brand} /></label><label>Model<input name="model" required defaultValue={existing?.model} /></label></div><div className="form-row"><label>Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={existing?.slug} /></label><label>Category<input name="category" required placeholder="Phones" defaultValue={existing?.category} /></label></div><div className="form-row"><label>Price (INR)<input name="priceInr" required type="number" min="0" step="0.01" defaultValue={existing ? paiseToInr(existing.priceInPaise) : undefined} /></label><label>Original price (INR)<input name="originalPriceInr" type="number" min="0" step="0.01" defaultValue={existing?.originalPriceInPaise ? paiseToInr(existing.originalPriceInPaise) : undefined} /></label></div><div className="form-row">{productId ? <label>Current stock<input value={`${existing?.stockQuantity ?? "—"} units`} readOnly /><small>To change stock, use the Inventory section in <Link to="/admin#operations">Admin Operations</Link>.</small></label> : <label>Initial stock quantity<input name="stockQuantity" required type="number" min="0" defaultValue={0} /></label>}<label>Condition<select name="condition" defaultValue={existing?.condition ?? "EXCELLENT"}><option>LIKE_NEW</option><option>EXCELLENT</option><option>GOOD</option><option>FAIR</option></select></label></div><ImageUpload initialUrl={existing?.imageUrls[0]} onUploaded={url => { setUploadedImage(url); setImageRemoved(false); setImageError(""); }} onRemoved={() => { setUploadedImage(undefined); setImageRemoved(true); }} /><label>Description<textarea name="description" required minLength={10} rows={5} defaultValue={existing?.description} /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : productId ? "Save changes" : "Create product"}<ArrowRight size={16} /></button>{imageError && <p className="form-status form-error" role="alert">{imageError}</p>}{mutation.isError && <p className="form-status form-error" role="alert">{(mutation.error as Error).message}</p>}</form>}</main></div>;
+  useEffect(() => {
+    if (authState.status === "unauthenticated") clearPrivateDataAfterUnauthorized(me.error, queryClient);
+  }, [authState.status, me.error]);
+  if (authState.status === "loading") return <div className="admin-loading">Checking secure session...</div>;
+  if (authState.status === "unauthenticated") return <Navigate to="/admin/login" replace />;
+  if (authState.status === "unavailable") return <AuthUnavailable onRetry={() => { void me.refetch(); }} />;
+  if (authState.user.role !== "ADMIN" && authState.user.role !== "FOUNDER") return <Navigate to="/admin" replace />;
+  return <div className="admin-shell"><aside className="admin-sidebar"><Logo /><NavLink to="/admin">← Back to dashboard</NavLink></aside><main className="admin-main"><div className="admin-topbar"><div><p className="eyebrow">Catalogue</p><h1>{productId ? "Edit product." : "Add a product."}</h1></div></div>{authState.verificationFailed && <AuthVerificationNotice onRetry={() => { void me.refetch(); }} />}{productId && existingList.isLoading ? <p className="admin-muted">Loading product...</p> : <form className="admin-product-form" onSubmit={submit}><div className="form-row"><label>Product name<input name="name" required defaultValue={existing?.name} /></label><label>SKU<input name="sku" required defaultValue={existing?.sku} /></label></div><div className="form-row"><label>Brand<input name="brand" required defaultValue={existing?.brand} /></label><label>Model<input name="model" required defaultValue={existing?.model} /></label></div><div className="form-row"><label>Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" defaultValue={existing?.slug} /></label><label>Category<input name="category" required placeholder="Phones" defaultValue={existing?.category} /></label></div><div className="form-row"><label>Price (INR)<input name="priceInr" required type="number" min="0" step="0.01" defaultValue={existing ? paiseToInr(existing.priceInPaise) : undefined} /></label><label>Original price (INR)<input name="originalPriceInr" type="number" min="0" step="0.01" defaultValue={existing?.originalPriceInPaise ? paiseToInr(existing.originalPriceInPaise) : undefined} /></label></div><div className="form-row">{productId ? <label>Current stock<input value={`${existing?.stockQuantity ?? "—"} units`} readOnly /><small>To change stock, use the Inventory section in <Link to="/admin#operations">Admin Operations</Link>.</small></label> : <label>Initial stock quantity<input name="stockQuantity" required type="number" min="0" defaultValue={0} /></label>}<label>Condition<select name="condition" defaultValue={existing?.condition ?? "EXCELLENT"}><option>LIKE_NEW</option><option>EXCELLENT</option><option>GOOD</option><option>FAIR</option></select></label></div><ImageUpload initialUrl={existing?.imageUrls[0]} onUploaded={url => { setUploadedImage(url); setImageRemoved(false); setImageError(""); }} onRemoved={() => { setUploadedImage(undefined); setImageRemoved(true); }} /><label>Description<textarea name="description" required minLength={10} rows={5} defaultValue={existing?.description} /></label><button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : productId ? "Save changes" : "Create product"}<ArrowRight size={16} /></button>{imageError && <p className="form-status form-error" role="alert">{imageError}</p>}{mutation.isError && <p className="form-status form-error" role="alert">{(mutation.error as Error).message}</p>}</form>}</main></div>;
 }
 
 function ImageUpload({ initialUrl, onUploaded, onRemoved }: { initialUrl?: string; onUploaded: (url: string) => void; onRemoved: () => void }) {

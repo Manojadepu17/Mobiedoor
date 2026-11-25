@@ -73,9 +73,48 @@ describe("catalogue response validation", () => {
     for (const originalPriceInPaise of [-1, 1.5, product.priceInPaise, Number.MAX_SAFE_INTEGER + 1]) {
       expect(isValidCatalogueProduct({ ...product, originalPriceInPaise })).toBe(false);
     }
-    for (const imageUrls of [["http://example.com/image.jpg"], [""], [null], [12]]) {
+  });
+
+  it("accepts HTTPS Cloudinary image URLs", () => {
+    expect(isValidCatalogueProduct({
+      ...product,
+      imageUrls: ["https://res.cloudinary.com/demo/image/upload/phone.jpg"],
+    })).toBe(true);
+  });
+
+  it("accepts approved local application assets and existing upload paths", () => {
+    expect(isValidCatalogueProduct({
+      ...product,
+      imageUrls: ["/categories/mobiles-photo.jpg", "/assets/promos/best-selling-apple-phones.png"],
+    })).toBe(true);
+    expect(isValidCatalogueProduct({ ...product, imageUrls: ["/uploads/phone.jpg"] })).toBe(true);
+  });
+
+  it("rejects protocol-relative image URLs", () => {
+    expect(isValidCatalogueProduct({ ...product, imageUrls: ["//example.com/image.jpg"] })).toBe(false);
+  });
+
+  it("rejects javascript image URLs", () => {
+    expect(isValidCatalogueProduct({ ...product, imageUrls: ["javascript:alert(1)"] })).toBe(false);
+  });
+
+  it("rejects unsupported external and HTTP image URLs", () => {
+    for (const imageUrl of [
+      "https://example.com/image.jpg",
+      "http://res.cloudinary.com/demo/image/upload/phone.jpg",
+    ]) {
+      expect(isValidCatalogueProduct({ ...product, imageUrls: [imageUrl] })).toBe(false);
+    }
+  });
+
+  it("rejects missing and malformed image values while allowing an empty image list", () => {
+    const { imageUrls: _imageUrls, ...missingImageUrls } = product;
+    expect(isValidCatalogueProduct(missingImageUrls)).toBe(false);
+
+    for (const imageUrls of [null, "", [""], [null], [12], ["/unapproved/image.jpg"], ["/uploads/../image.jpg"]]) {
       expect(isValidCatalogueProduct({ ...product, imageUrls })).toBe(false);
     }
+    expect(isValidCatalogueProduct({ ...product, imageUrls: [] })).toBe(true);
   });
 
   it("rejects missing pagination metadata", () => {
@@ -85,7 +124,6 @@ describe("catalogue response validation", () => {
   it("rejects invalid product records, image URLs, and enum values", () => {
     expect(isValidCatalogueProduct({ ...product, priceInPaise: -1 })).toBe(false);
     expect(isValidCatalogueProduct({ ...product, condition: "UNKNOWN" })).toBe(false);
-    expect(isValidCatalogueProduct({ ...product, imageUrls: ["javascript:alert(1)"] })).toBe(false);
     expect(isValidCatalogueProduct({ ...product, availability: "UNKNOWN" })).toBe(false);
   });
 

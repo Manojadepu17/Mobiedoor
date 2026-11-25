@@ -163,5 +163,26 @@ if (!testDatabaseUrl) {
       expect(duplicate.status).toBe(409);
       expect(await prisma.session.count({ where: { user: { email } } })).toBe(1);
     });
+
+    it("creates only one account and session for concurrent registrations of the same email", async () => {
+      const concurrentEmail = `concurrent-${email}`;
+      const payload = {
+        name: "Concurrent Integration Customer",
+        email: concurrentEmail,
+        password: "customer-password-2026!",
+        confirmPassword: "customer-password-2026!",
+      };
+      const responses = await Promise.all([
+        request(app).post("/auth/register").send(payload),
+        request(app).post("/auth/register").send(payload),
+      ]);
+      fixtureIds.userIds.push(...responses
+        .filter(response => response.status === 201 && typeof response.body.data?.id === "string")
+        .map(response => response.body.data.id as string));
+
+      expect(responses.map(response => response.status).sort()).toEqual([201, 409]);
+      expect(await prisma.user.count({ where: { email: concurrentEmail } })).toBe(1);
+      expect(await prisma.session.count({ where: { user: { email: concurrentEmail } } })).toBe(1);
+    });
   });
 }
